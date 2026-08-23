@@ -8,7 +8,7 @@ public class PdfPrintService : IPdfPrintService
     private static readonly string SumatraPath =
         Path.Combine(AppContext.BaseDirectory, "tools", "SumatraPDF.exe");
 
-    public string PrintPdf(string pdfFilePath, string printerName, string paperSize, int copies)
+    public string PrintPdf(string pdfFilePath, string printerName, string paperSize, int copies, bool grayscale = false, bool duplex = false)
     {
         if (!File.Exists(SumatraPath))
         {
@@ -22,7 +22,19 @@ public class PdfPrintService : IPdfPrintService
 
         try
         {
-            string printSettings = $"paper={paperSize},noscale";
+            var settingsParts = new List<string> { $"paper={paperSize}", "noscale" };
+
+            if (grayscale)
+            {
+                settingsParts.Add("monochrome");
+            }
+
+            if (duplex)
+            {
+                settingsParts.Add("duplex");
+            }
+
+            string printSettings = string.Join(",", settingsParts);
 
             for (int i = 0; i < copies; i++)
             {
@@ -38,7 +50,7 @@ public class PdfPrintService : IPdfPrintService
                 process?.WaitForExit(30000);
             }
 
-            return $"[نجاح] تم إرسال {copies} نسخة إلى '{printerName}' بمقاس {paperSize}.";
+            return $"[نجاح] تم إرسال {copies} نسخة إلى '{printerName}' بمقاس {paperSize}{(grayscale ? " (أبيض وأسود)" : "")}{(duplex ? " (وجهين)" : "")}.";
         }
         catch (Exception ex)
         {

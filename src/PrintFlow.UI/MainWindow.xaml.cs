@@ -1,12 +1,12 @@
 ﻿using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using PrintFlow.Application;
 using PrintFlow.Domain;
 using PrintFlow.Infrastructure;
-using System.Collections.Concurrent;
 
 namespace PrintFlow.UI;
 
@@ -27,10 +27,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        _refreshTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromSeconds(5)
-        };
+        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _refreshTimer.Tick += async (s, e) => await RefreshPrintersAsync(false);
         _refreshTimer.Start();
 
@@ -79,11 +76,6 @@ public partial class MainWindow : Window
             }
 
             this.Title = $"PrintFlow - تم العثور على {printers.Count} برنتر | آخر تحديث: {DateTime.Now:HH:mm:ss}";
-
-            if (isManualRefresh)
-            {
-                ResultText.Text = "تم تحديث القائمة بنجاح.";
-            }
         }
         catch (OperationCanceledException) { }
         finally
@@ -92,125 +84,66 @@ public partial class MainWindow : Window
         }
     }
 
-    private void PrintTestButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (PrintersListBox.SelectedItem is not string selected)
-        {
-            ResultText.Text = "اختر برنتر من القائمة الأول.";
-            return;
-        }
-
-        string printerName = ExtractPrinterName(selected);
-        ResultText.Text = _printerRepository.SendTestPage(printerName);
-    }
-
-    private void CapabilitiesButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (PrintersListBox.SelectedItem is not string selected)
-        {
-            ResultText.Text = "اختر برنتر من القائمة الأول.";
-            return;
-        }
-
-        string printerName = ExtractPrinterName(selected);
-
-        var capabilities = _printerRepository.GetCapabilities(printerName);
-        string paperSizesText = string.Join(", ", capabilities.PaperSizes.Take(5));
-
-        ResultText.Text =
-            $"ألوان: {(capabilities.SupportsColor ? "نعم" : "لا")} | " +
-            $"وجهين: {(capabilities.SupportsDuplex ? "نعم" : "لا")} | " +
-            $"افتراضي: {capabilities.DefaultPaperSize}\n" +
-            $"أحجام ورق متاحة: {paperSizesText}...";
-    }
-
-    private void SelectForJobButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (PrintersListBox.SelectedItems.Count == 0)
-        {
-            ResultText.Text = "اختر برنتر واحدة على الأقل من القائمة.";
-            return;
-        }
-
-        var selectedNames = PrintersListBox.SelectedItems
-            .Cast<string>()
-            .Select(ExtractPrinterName)
-            .ToList();
-
-        var selectedPrinters = _lastPrinters.Where(p => selectedNames.Contains(p.Name)).ToList();
-        var eligible = PrinterSelectionRules.FilterEligible(selectedPrinters);
-        var excluded = selectedPrinters.Except(eligible).ToList();
-
-        string message = $"تم تحديد {eligible.Count} برنتر مؤهلة للـ Job.";
-        if (excluded.Count > 0)
-        {
-            string excludedNames = string.Join(", ", excluded.Select(p => $"{p.Name} ({p.Status})"));
-            message += $"\nتم استبعاد: {excludedNames}";
-        }
-
-        ResultText.Text = message;
-    }
-
     private static string ExtractPrinterName(string displayText)
     {
         int dashIndex = displayText.IndexOf(" —");
         return (dashIndex > 0 ? displayText[..dashIndex] : displayText).Replace(" (افتراضية)", "");
     }
 
-    private void DistributeButton_Click(object sender, RoutedEventArgs e)
+    private void MultiPrinterCheckBox_Changed(object sender, RoutedEventArgs e)
     {
-        if (PrintersListBox.SelectedItems.Count == 0)
-        {
-            ResultText.Text = "اختر برنتر واحدة على الأقل من القائمة.";
-            return;
-        }
-
-        if (!int.TryParse(TotalCopiesTextBox.Text, out int totalCopies) || totalCopies <= 0)
-        {
-            ResultText.Text = "اكتب عدد نسخ صحيح أكبر من صفر.";
-            return;
-        }
-
-        var selectedNames = PrintersListBox.SelectedItems.Cast<string>().Select(ExtractPrinterName).ToList();
-        var selectedPrinters = _lastPrinters.Where(p => selectedNames.Contains(p.Name)).ToList();
-        var eligible = PrinterSelectionRules.FilterEligible(selectedPrinters);
-
-        if (eligible.Count == 0)
-        {
-            ResultText.Text = "مفيش برنتر مؤهلة من المحدد.";
-            return;
-        }
-
-        var eligibleNames = eligible.Select(p => p.Name).ToList();
-        var distribution = CopyDistributionCalculator.Distribute(totalCopies, eligibleNames);
-
-        var resultLines = new List<string>();
-        foreach (var item in distribution)
-        {
-            string result = _printerRepository.SendCopies(item.PrinterName, item.CopiesAssigned);
-            resultLines.Add(result);
-        }
-
-        ResultText.Text = string.Join("\n", resultLines);
+        MultiPrinterPanel.Visibility = MultiPrinterCheckBox.IsChecked == true
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
-    private void LoadFilesButton_Click(object sender, RoutedEventArgs e)
+    private void FileDropArea_DragOver(object sender, DragEventArgs e)
     {
-        var dialog = new OpenFileDialog
-        {
-            Filter = "PDF Files (*.pdf)|*.pdf",
-            Multiselect = true
-        };
+        e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
 
+    private void FileDropArea_Drop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+
+        var droppedFiles = (string[])e.Data.GetData(DataFormats.FileDrop);
+        var pdfFiles = droppedFiles.Where(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        if (pdfFiles.Count == 0)
+        {
+            ResultText_SetIfExists("الملفات المسحوبة لازم تكون PDF.");
+            return;
+        }
+
+        AddFilesToList(pdfFiles);
+    }
+
+    private void FileDropArea_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog { Filter = "PDF Files (*.pdf)|*.pdf", Multiselect = true };
         if (dialog.ShowDialog() == true)
         {
-            _loadedFiles = dialog.FileNames.ToList();
-            LoadedFilesListBox.Items.Clear();
-            foreach (var file in _loadedFiles)
+            AddFilesToList(dialog.FileNames.ToList());
+        }
+    }
+
+    private void FileDropArea_Click(object sender, MouseButtonEventArgs e) => FileDropArea_Click(sender, (RoutedEventArgs)null!);
+
+    private void AddFilesToList(List<string> newFiles)
+    {
+        foreach (var file in newFiles)
+        {
+            if (!_loadedFiles.Contains(file))
             {
-                LoadedFilesListBox.Items.Add(Path.GetFileName(file));
+                _loadedFiles.Add(file);
             }
-            ResultText.Text = $"تم تحميل {_loadedFiles.Count} ملف.";
+        }
+
+        LoadedFilesListBox.Items.Clear();
+        foreach (var file in _loadedFiles)
+        {
+            LoadedFilesListBox.Items.Add(Path.GetFileName(file));
         }
     }
 
@@ -218,7 +151,7 @@ public partial class MainWindow : Window
     {
         if (_loadedFiles.Count == 0)
         {
-            ResultText.Text = "حمّل ملفات الأول.";
+            MessageBox.Show("حمّل ملفات الأول.");
             return;
         }
 
@@ -227,62 +160,103 @@ public partial class MainWindow : Window
         _mergedFilePath = Path.Combine(outputFolder, $"merged_{DateTime.Now:yyyyMMdd_HHmmss}.pdf");
 
         string? watermark = string.IsNullOrWhiteSpace(WatermarkTextBox.Text) ? null : WatermarkTextBox.Text;
-        ResultText.Text = _pdfMergeService.MergeFiles(_loadedFiles, _mergedFilePath, watermark);
+        bool addPageNumbers = PageNumbersCheckBox.IsChecked == true;
+
+        string result = _pdfMergeService.MergeFiles(_loadedFiles, _mergedFilePath, watermark, addPageNumbers);
+        MessageBox.Show(result);
     }
 
     private async void PrintToAllButton_Click(object sender, RoutedEventArgs e)
     {
         if (string.IsNullOrEmpty(_mergedFilePath) || !File.Exists(_mergedFilePath))
         {
-            ResultText.Text = "ادمج الملفات الأول قبل الطباعة.";
+            MessageBox.Show("اضغط \"بدء معالجة الملفات\" الأول قبل الطباعة.");
             return;
         }
 
-        if (PrintersListBox.SelectedItems.Count == 0)
+        if (!int.TryParse(CopiesPerPrinterTextBox.Text, out int totalCopiesEntered) || totalCopiesEntered <= 0)
         {
-            ResultText.Text = "اختر برنتر واحدة على الأقل.";
-            return;
-        }
-
-        if (!int.TryParse(CopiesPerPrinterTextBox.Text, out int copiesPerPrinter) || copiesPerPrinter <= 0)
-        {
-            ResultText.Text = "اكتب عدد نسخ صحيح لكل برنتر.";
+            MessageBox.Show("اكتب عدد نسخ صحيح.");
             return;
         }
 
         string paperSize = (PaperSizeComboBox.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "A4";
+        bool grayscale = GrayscaleCheckBox.IsChecked == true;
+        bool duplex = DuplexCheckBox.IsChecked == true;
+        bool multiPrinterMode = MultiPrinterCheckBox.IsChecked == true;
+        bool distributeMode = DistributeCheckBox.IsChecked == true;
 
-        var selectedNames = PrintersListBox.SelectedItems.Cast<string>().Select(ExtractPrinterName).ToList();
-        var selectedPrinters = _lastPrinters.Where(p => selectedNames.Contains(p.Name)).ToList();
-        var eligible = PrinterSelectionRules.FilterEligible(selectedPrinters);
+        // تحديد البرنترات المستهدفة حسب الوضع
+        List<Printer> targetPrinters;
+        if (multiPrinterMode)
+        {
+            var selectedNames = PrintersListBox.SelectedItems.Cast<string>().Select(ExtractPrinterName).ToList();
+            targetPrinters = _lastPrinters.Where(p => selectedNames.Contains(p.Name)).ToList();
+        }
+        else
+        {
+            // وضع طابعة واحدة: نستخدم الافتراضية تلقائيًا
+            targetPrinters = _lastPrinters.Where(p => p.IsDefault).ToList();
+            if (targetPrinters.Count == 0 && _lastPrinters.Count > 0)
+            {
+                targetPrinters = new List<Printer> { _lastPrinters[0] };
+            }
+        }
+
+        var eligible = PrinterSelectionRules.FilterEligible(targetPrinters);
 
         if (eligible.Count == 0)
         {
-            ResultText.Text = "مفيش برنتر مؤهلة من المحدد.";
+            MessageBox.Show("مفيش برنتر مؤهلة متاحة حاليًا.");
             return;
         }
 
-        // نمنع المستخدم يدوس تاني وهو لسه شغال، ونوريه إن الطباعة بالتوازي شغال
-        PrintToAllButton.IsEnabled = false;
-        ResultText.Text = $"جاري الطباعة على {eligible.Count} برنتر بالتوازي، من فضلك انتظر...";
-
         string mergedFilePath = _mergedFilePath;
-        var results = new ConcurrentDictionary<int, string>();
 
-        await Task.Run(() =>
+        var resultLines = await Task.Run(() =>
         {
-            Parallel.For(0, eligible.Count, i =>
+            var lines = new List<string>();
+
+            if (distributeMode && eligible.Count > 1)
             {
-                var printer = eligible[i];
-                string result = _pdfPrintService.PrintPdf(mergedFilePath, printer.Name, paperSize, copiesPerPrinter);
-                results[i] = result;
-            });
+                // توزيع إجمالي النسخ على البرنترات
+                var distribution = CopyDistributionCalculator.Distribute(totalCopiesEntered, eligible.Select(p => p.Name).ToList());
+                foreach (var item in distribution)
+                {
+                    lines.Add(_pdfPrintService.PrintPdf(mergedFilePath, item.PrinterName, paperSize, item.CopiesAssigned, grayscale, duplex));
+                }
+            }
+            else
+            {
+                // نفس عدد النسخ على كل برنتر، بالتوازي
+                var results = new System.Collections.Concurrent.ConcurrentDictionary<int, string>();
+                Parallel.For(0, eligible.Count, i =>
+                {
+                    var printer = eligible[i];
+                    results[i] = _pdfPrintService.PrintPdf(mergedFilePath, printer.Name, paperSize, totalCopiesEntered, grayscale, duplex);
+                });
+                lines.AddRange(Enumerable.Range(0, eligible.Count).Select(i => results[i]));
+            }
+
+            return lines;
         });
 
-        // ترتيب النتايج بنفس ترتيب البرنترات الأصلي
-        var resultLines = Enumerable.Range(0, eligible.Count).Select(i => results[i]).ToList();
-
-        ResultText.Text = string.Join("\n", resultLines);
-        PrintToAllButton.IsEnabled = true;
+        MessageBox.Show(string.Join("\n", resultLines));
     }
+
+    private void ResetButton_Click(object sender, RoutedEventArgs e)
+    {
+        _loadedFiles.Clear();
+        LoadedFilesListBox.Items.Clear();
+        WatermarkTextBox.Text = "";
+        PageNumbersCheckBox.IsChecked = false;
+        GrayscaleCheckBox.IsChecked = false;
+        DuplexCheckBox.IsChecked = false;
+        MultiPrinterCheckBox.IsChecked = false;
+        DistributeCheckBox.IsChecked = false;
+        CopiesPerPrinterTextBox.Text = "1";
+        _mergedFilePath = null;
+    }
+
+    private void ResultText_SetIfExists(string text) => MessageBox.Show(text);
 }
