@@ -13,4 +13,11 @@
     <UseWPF>true</UseWPF>
   </PropertyGroup>
 
+  <ItemGroup>
+    <None Include="..\..\tools\SumatraPDF.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>tools\SumatraPDF.exe</Link>
+    </None>
+  </ItemGroup>
+
 </Project>
