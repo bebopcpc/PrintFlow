@@ -1,4 +1,4 @@
-<Window x:Class="PrintFlow.UI.MainWindow"
+﻿<Window x:Class="PrintFlow.UI.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:PrintFlow.UI"
@@ -132,13 +132,14 @@
                                         <CheckBox Content="ترقيم صفحات كل ملف"
                                                   IsChecked="{Binding Settings.NumberPagesPerFile}"/>
                                         <CheckBox Content="دمج وحفظ الملفات"
-                                                  IsChecked="{Binding Settings.MergeFiles}"/>
+                                                  IsChecked="{Binding Settings.MergeFiles}"
+                                                  ToolTip="مفتوحة = كل الملفات تبقى مستند واحد.&#10;مقفولة = كل ملف يفضل لوحده، والعلامة المائية والترقيم بيتحطوا على كل واحد فيهم."/>
                                         <CheckBox Content="حفظ الملفات المحوّلة لـ PDF"
                                                   IsChecked="{Binding Settings.SaveConvertedToPdf}"
                                                   IsEnabled="False" Foreground="{StaticResource MutedBrush}"/>
                                         <CheckBox Content="حفظ الملفات بعد المعالجة"
                                                   IsChecked="{Binding Settings.SaveAfterProcessing}"
-                                                  IsEnabled="False" Foreground="{StaticResource MutedBrush}"/>
+                                                  ToolTip="بيحفظ الملفات المعالجة في &quot;المجلد الافتراضي&quot; من تاب الإعدادات العامة بدل التيمب.&#10;من غيرها الملفات بتتمسح بعد أيام."/>
 
                                         <TextBlock Text="ضغط الملفات" Style="{StaticResource FieldLabel}"/>
                                         <ComboBox ItemsSource="{Binding CompressionModes}"
@@ -159,10 +160,11 @@
                                 </GroupBox>
 
                                 <GroupBox Header="خيارات الشرائح">
-                                    <StackPanel IsEnabled="False">
-                                        <TextBlock Text="عدد الشرائح" Style="{StaticResource FieldLabel}"/>
+                                    <StackPanel>
+                                        <TextBlock Text="عدد الشرائح على الورقة" Style="{StaticResource FieldLabel}"/>
                                         <ComboBox ItemsSource="{Binding SlidesPerSheetOptions}"
-                                                  SelectedItem="{Binding Settings.SlidesPerSheet}"/>
+                                                  SelectedItem="{Binding Settings.SlidesPerSheet}"
+                                                  ToolTip="١ = كل صفحة على ورقة لوحدها (المستند بيعدّي زي ما هو).&#10;التقسيم بيتحدد لوحده حسب شكل الورقة وشكل الصفحة."/>
 
                                         <TextBlock Text="اتجاه الصفحة" Style="{StaticResource FieldLabel}"/>
                                         <ComboBox ItemsSource="{Binding PageOrientations}"
@@ -184,6 +186,53 @@
 
                                         <CheckBox Content="إضافة إطار حول الشريحة"
                                                   IsChecked="{Binding Settings.DrawSlideBorder}"/>
+
+                                        <!-- معاينة حية: الأرقام دي بتتحسب بنفس دوال الطباعة
+                                             بالظبط، فمستحيل المعاينة تختلف عن الورق الطالع -->
+                                        <TextBlock Text="شكل الورقة" Style="{StaticResource FieldLabel}"/>
+
+                                        <Border Background="#F0F2F7" CornerRadius="5" Padding="10"
+                                                BorderBrush="{StaticResource BorderBrush2}" BorderThickness="1">
+                                            <StackPanel>
+                                                <Border Background="White" BorderBrush="#B9C0CE" BorderThickness="1"
+                                                        Width="{Binding SlidePreviewWidth}"
+                                                        Height="{Binding SlidePreviewHeight}"
+                                                        HorizontalAlignment="Center"
+                                                        FlowDirection="LeftToRight">
+                                                    <ItemsControl ItemsSource="{Binding SlidePreview}">
+                                                        <ItemsControl.ItemsPanel>
+                                                            <ItemsPanelTemplate>
+                                                                <Canvas/>
+                                                            </ItemsPanelTemplate>
+                                                        </ItemsControl.ItemsPanel>
+                                                        <ItemsControl.ItemContainerStyle>
+                                                            <Style TargetType="ContentPresenter">
+                                                                <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                                                                <Setter Property="Canvas.Top" Value="{Binding Y}"/>
+                                                            </Style>
+                                                        </ItemsControl.ItemContainerStyle>
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Border Width="{Binding Width}" Height="{Binding Height}"
+                                                                        Background="#DCE6F8" BorderBrush="#8FA9D6"
+                                                                        BorderThickness="1" CornerRadius="1">
+                                                                    <TextBlock Text="{Binding Number}"
+                                                                               HorizontalAlignment="Center"
+                                                                               VerticalAlignment="Center"
+                                                                               FontWeight="Bold" FontSize="12"
+                                                                               Foreground="#2B4A80"/>
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </Border>
+
+                                                <TextBlock Text="{Binding SlideLayoutSummary}"
+                                                           HorizontalAlignment="Center" Margin="0,8,0,0"
+                                                           FontSize="11" Foreground="#556"
+                                                           TextAlignment="Center" TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
                                     </StackPanel>
                                 </GroupBox>
                             </StackPanel>
@@ -192,13 +241,22 @@
                         <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="0,0,8,0">
                             <StackPanel>
                                 <GroupBox Header="خيارات البوكليت (Booklet)">
-                                    <StackPanel IsEnabled="False">
+                                    <StackPanel>
                                         <CheckBox Content="طباعة الملفات بنظام بوكليت"
-                                                  IsChecked="{Binding Settings.BookletMode}"/>
+                                                  IsChecked="{Binding Settings.BookletMode}"
+                                                  ToolTip="صفحتين على كل وجه بترتيب مخصوص.&#10;اطبع على الوجهين واطوي من النص — الكتيّب هيطلع مرتب.&#10;بيتجاهل عدد الشرائح واتجاه الورقة."/>
+
                                         <TextBlock Text="اتجاه البدء" Style="{StaticResource FieldLabel}"/>
                                         <ComboBox ItemsSource="{Binding BookletStarts}"
                                                   DisplayMemberPath="Label" SelectedValuePath="Value"
-                                                  SelectedValue="{Binding Settings.BookletStart}"/>
+                                                  SelectedValue="{Binding Settings.BookletStart}"
+                                                  IsEnabled="{Binding Settings.BookletMode}"
+                                                  ToolTip="يمين = كتيّب عربي (الغلاف على اليمين).&#10;يسار = كتيّب إنجليزي."/>
+
+                                        <TextBlock Text="{Binding BookletSummary}" Margin="0,8,0,0"
+                                                   FontSize="11" Foreground="#556" TextWrapping="Wrap"
+                                                   Visibility="{Binding Settings.BookletMode,
+                                                                Converter={StaticResource BoolToVis}}"/>
                                     </StackPanel>
                                 </GroupBox>
 
@@ -424,10 +482,11 @@
                                               DisplayMemberPath="Label" SelectedValuePath="Value"
                                               SelectedValue="{Binding App.FileSortOrder}"/>
 
-                                    <TextBlock Text="طريقة الحساب" Style="{StaticResource FieldLabel}"/>
+                                    <TextBlock Text="طريقة الحساب (قريبًا)" Style="{StaticResource FieldLabel}"/>
                                     <ComboBox ItemsSource="{Binding CountingMethods}"
                                               DisplayMemberPath="Label" SelectedValuePath="Value"
-                                              SelectedValue="{Binding App.CountingMethod}"/>
+                                              SelectedValue="{Binding App.CountingMethod}" IsEnabled="False"
+                                              ToolTip="الاختيار بيتحفظ، بس حساب التكلفة بالورقة لسه مش مبني"/>
 
                                     <TextBlock Text="المظهر (قريبًا)" Style="{StaticResource FieldLabel}"/>
                                     <ComboBox ItemsSource="{Binding Themes}"
@@ -442,7 +501,8 @@
                                               ToolTip="الاختيار بيتحفظ، بس الترجمة للإنجليزي لسه مش مبنية"/>
 
                                     <TextBlock Text="مجلد افتراضي لحفظ الملفات" Style="{StaticResource FieldLabel}"/>
-                                    <TextBox Text="{Binding App.DefaultOutputFolder}" IsReadOnly="True"/>
+                                    <TextBox Text="{Binding App.DefaultOutputFolder}" IsReadOnly="True"
+                                             ToolTip="بيشتغل مع &quot;حفظ الملفات بعد المعالجة&quot; في تاب الرئيسية.&#10;سيبه فاضي والملفات هتروح للتيمب وتتمسح بعد أيام."/>
                                     <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                         <Button Content="اختيار مجلد" Background="#1B2A4A" FontSize="11" Padding="8,4"
                                                 Margin="0,0,6,0" Style="{StaticResource ActionButton}"
@@ -470,7 +530,7 @@
                                 <StackPanel>
                                     <CheckBox Content="ترقيم الورقة كاملة بدل الشريحة"
                                               IsChecked="{Binding App.NumberWholeSheetInsteadOfSlide}"
-                                              ToolTip="بيفرق بس لما نبني نظام الشرائح"/>
+                                              ToolTip="مفتوحة = رقم واحد للورقة كلها بحجمه الطبيعي (1، 2، 3…).&#10;مقفولة = كل شريحة بترقمها الأصلي، والرقم بيصغّر مع الشريحة.&#10;بيفرق بس لما يبقى في أكتر من شريحة على الورقة."/>
 
                                     <CheckBox Content="كل ملف يبدأ ترقيمه من 1"
                                               Margin="0,6,0,0"
@@ -537,7 +597,7 @@
                                               IsChecked="{Binding App.WatermarkEnabled}"/>
                                     <CheckBox Content="العلامة على الورقة كاملة بدل الشريحة"
                                               IsChecked="{Binding App.WatermarkOnWholeSheet}"
-                                              ToolTip="بيفرق بس لما نبني نظام الشرائح"/>
+                                              ToolTip="مفتوحة = علامة واحدة كبيرة على الورقة كلها.&#10;مقفولة = علامة على كل شريحة لوحدها، بتصغّر معاها.&#10;بيفرق بس لما يبقى في أكتر من شريحة على الورقة."/>
 
                                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0"
                                                 IsEnabled="{Binding App.WatermarkEnabled}">

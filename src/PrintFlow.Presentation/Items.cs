@@ -132,6 +132,21 @@ public sealed class PrinterItem : ObservableObject
     }
 }
 
+/// <summary>
+/// خانة واحدة في معاينة الشرائح — بإحداثيات بكسل جاهزة للرسم.
+///
+/// الأرقام دي **مش تقريبية**: بتتحسب بنفس دوال SheetLayout اللي بتحسب
+/// الطباعة الحقيقية، مصغّرة بس. يعني المعاينة مستحيل تختلف عن الورق الطالع.
+/// </summary>
+public sealed class SlidePreviewCell
+{
+    public required int Number { get; init; }
+    public required double X { get; init; }
+    public required double Y { get; init; }
+    public required double Width { get; init; }
+    public required double Height { get; init; }
+}
+
 /// <summary>لون في قايمة الألوان: الاسم العربي + قيمته hex.</summary>
 public sealed class NamedColor
 {

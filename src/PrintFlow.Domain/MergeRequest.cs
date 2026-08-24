@@ -24,6 +24,24 @@ public sealed record PageNumberStyle
     /// </summary>
     public bool Backdrop { get; init; } = true;
 
+    /// <summary>
+    /// الرقم اللي هيتكتب على أول صفحة في المستند ده.
+    ///
+    /// موجود عشان وضع "من غير دمج": الملفات بتفضل منفصلة بس الترقيم يفضل
+    /// متصل عبرها — الملف الأول ١..٥ والتاني بيكمّل من ٦.
+    /// في وضع الدمج بيفضل ١ ومالوش أي أثر.
+    /// </summary>
+    public int FirstPageNumber { get; init; } = 1;
+
+    /// <summary>
+    /// إجمالي الصفحات اللي بيتكتب بعد "من". صفر = استخدم عدد صفحات
+    /// المستند ده نفسه (وده السلوك الطبيعي في وضع الدمج).
+    ///
+    /// في وضع "من غير دمج" بنمرّر هنا **إجمالي كل الملفات** عشان يطلع
+    /// "صفحة ٦ من ٤٠" مش "صفحة ١ من ١٢".
+    /// </summary>
+    public int TotalPages { get; init; }
+
     public static PageNumberStyle From(AppSettings app) => new()
     {
         Position = app.PageNumberPosition,
@@ -32,6 +50,16 @@ public sealed record PageNumberStyle
         EdgeMargin = app.PageNumberEdgeMargin,
         RestartForEachFile = app.RestartNumberingForEachFile,
         Backdrop = app.PageNumberBackdrop
+    };
+
+    /// <summary>
+    /// نسخة من نفس الشكل بس بترقيم بيبدأ من رقم معيّن وإجمالي محدد.
+    /// بتتستخدم في وضع "من غير دمج" لكل ملف على حدة.
+    /// </summary>
+    public PageNumberStyle ContinuingFrom(int firstPageNumber, int totalPages) => this with
+    {
+        FirstPageNumber = firstPageNumber,
+        TotalPages = totalPages
     };
 }
 
@@ -158,6 +186,22 @@ public sealed record MergeRequest
             CustomText = OverlayTextStyle.From(app)
         };
     }
+
+    /// <summary>في حاجة أصلًا هتترسم فوق الورق؟</summary>
+    public bool HasAnyOverlay => PageNumbers is not null || Watermark is not null || CustomText is not null;
+
+    /// <summary>
+    /// نفس الطلب بس بالإضافات المطلوبة بس — الباقي بيتشال.
+    ///
+    /// بتتستخدم في تقسيم الإضافات على مرحلتين حوالين تجميع الشرائح:
+    /// اللي على الصفحة الأصلية بيتحط الأول، واللي على الورقة بيتحط بعدين.
+    /// </summary>
+    public MergeRequest KeepOnly(OverlayStage stage) => this with
+    {
+        PageNumbers = stage.PageNumbers ? PageNumbers : null,
+        Watermark = stage.Watermark ? Watermark : null,
+        CustomText = stage.CustomText ? CustomText : null
+    };
 }
 
 /// <summary>

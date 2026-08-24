@@ -12,14 +12,45 @@ namespace PrintFlow.Tests;
 /// </summary>
 public class SpoolTimeoutPolicyTests
 {
-    /// <summary>الحالة اللي فضحت الباج: ٢١٠ صفحة أخدت ~٣ دقايق والمهلة كانت ٢.</summary>
-    [Fact]
-    public void The_Two_Hundred_And_Ten_Page_Job_Gets_More_Than_Three_Minutes()
-    {
-        var timeout = SpoolTimeoutPolicy.For(pageCount: 210, copies: 1);
+    /// <summary>
+    /// سرعة السبولنج **المتقاسة** على طابعة حقيقية: ٢٢ صفحة في ١٣٠.٩ ثانية،
+    /// يعني ٦ ثواني للصفحة تقريبًا.
+    ///
+    /// التستات اللي تحت مبنية على الرقم ده مش على تخمين. أول نسخة من المعادلة
+    /// كانت مفترضة ١٠٠ صفحة/دقيقة — أسرع من الواقع بعشر مرات — وكانت هتقتل
+    /// أي جوب أكبر من ٥٠ صفحة تقريبًا.
+    /// </summary>
+    private const double MeasuredSecondsPerPage = 130.9 / 22.0;
 
-        Assert.True(timeout.TotalMinutes > 3,
-            $"٢١٠ صفحة لازم تاخد أكتر من ٣ دقايق، وأخدت {timeout.TotalMinutes:0.0}");
+    private static double RealMinutesFor(int pages, int copies)
+        => pages * copies * MeasuredSecondsPerPage / 60.0;
+
+    /// <summary>الجوب اللي اتقاس فعلًا. لازم المهلة تغطيه وفيها فسحة.</summary>
+    [Fact]
+    public void The_Measured_Job_Fits_Comfortably()
+    {
+        var timeout = SpoolTimeoutPolicy.For(pageCount: 22, copies: 1);
+
+        Assert.True(timeout.TotalMinutes > RealMinutesFor(22, 1),
+            $"المقاس {RealMinutesFor(22, 1):0.0} د والمهلة {timeout.TotalMinutes:0.0} د");
+    }
+
+    /// <summary>
+    /// ملف الـ ٢١٠ صفحة بتاع المطبعة. بالسرعة المتقاسة ده حوالي ٢١ دقيقة —
+    /// والمعادلة القديمة كانت بتديله ٧ دقايق وتقتله.
+    /// </summary>
+    [Theory]
+    [InlineData(210, 1)]
+    [InlineData(210, 5)]
+    [InlineData(500, 1)]
+    [InlineData(50, 10)]
+    public void Real_Jobs_Are_Never_Killed_Early(int pages, int copies)
+    {
+        var timeout = SpoolTimeoutPolicy.For(pages, copies);
+        double needed = RealMinutesFor(pages, copies);
+
+        Assert.True(timeout.TotalMinutes >= needed,
+            $"{pages} صفحة × {copies} محتاجة {needed:0.0} د والمهلة {timeout.TotalMinutes:0.0} د");
     }
 
     /// <summary>

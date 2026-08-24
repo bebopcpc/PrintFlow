@@ -446,6 +446,141 @@ public class MainViewModelTests : IDisposable
         Assert.Null(merge.LastRequest?.PageNumbers);
     }
 
+    // ══════════ وضع "من غير دمج" ══════════
+
+    /// <summary>
+    /// الباج اللي كان موجود: شيل علامة "دمج الملفات" والعلامة المائية
+    /// والترقيم بيختفوا تمامًا — الملفات كانت بتتطبع زي ما هي بالظبط.
+    /// </summary>
+    [Fact]
+    public async Task Each_File_Is_Processed_On_Its_Own_When_Merging_Is_Off()
+    {
+        var merge = new FakeMergeService { PageCount = 4 };
+        var vm = CreateViewModel(mergeService: merge, pdfInfo: new FakePdfInfoService { PageCount = 4 });
+
+        vm.AddFiles(new[] { MakeFile("a.pdf"), MakeFile("b.pdf"), MakeFile("c.pdf") });
+        vm.Settings.MergeFiles = false;
+        vm.Settings.NumberPagesPerFile = true;
+        vm.Settings.PrintDirectlyAfterProcessing = false;
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Equal(3, merge.Requests.Count);
+        Assert.All(merge.Requests, r => Assert.Single(r.InputFiles));
+        Assert.All(merge.Requests, r => Assert.NotNull(r.PageNumbers));
+    }
+
+    /// <summary>
+    /// الترقيم المتصل لازم يفضل متصل حتى والملفات منفصلة:
+    /// الأول ١..٤ والتاني بيكمّل من ٥ والتالت من ٩، وكلهم "من ١٢".
+    /// </summary>
+    [Fact]
+    public async Task Numbering_Runs_Continuously_Across_Separate_Files()
+    {
+        var merge = new FakeMergeService { PageCount = 4 };
+        var vm = CreateViewModel(mergeService: merge, pdfInfo: new FakePdfInfoService { PageCount = 4 });
+
+        vm.AddFiles(new[] { MakeFile("a.pdf"), MakeFile("b.pdf"), MakeFile("c.pdf") });
+        vm.Settings.MergeFiles = false;
+        vm.Settings.NumberPagesPerFile = true;
+        vm.Settings.PrintDirectlyAfterProcessing = false;
+        vm.App.RestartNumberingForEachFile = false;
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Equal([1, 5, 9], merge.Requests.Select(r => r.PageNumbers!.FirstPageNumber));
+        Assert.All(merge.Requests, r => Assert.Equal(12, r.PageNumbers!.TotalPages));
+    }
+
+    /// <summary>
+    /// أهم فرق عن وضع الدمج: ملف بايظ وسط ٢٠ ملف **مايوقفش** الباقي.
+    /// اللي واقف على الماكينة يخسر ١٩ ملف سليم عشان واحد بايظ = سلوك غلط.
+    /// </summary>
+    [Fact]
+    public async Task One_Bad_File_Does_Not_Stop_The_Rest()
+    {
+        var merge = new FakeMergeService { PageCount = 2 };
+        merge.FailFor.Add("bad.pdf");
+
+        var vm = CreateViewModel(mergeService: merge, pdfInfo: new FakePdfInfoService { PageCount = 2 });
+        vm.AddFiles(new[] { MakeFile("good1.pdf"), MakeFile("bad.pdf"), MakeFile("good2.pdf") });
+        vm.Settings.MergeFiles = false;
+        vm.Settings.NumberPagesPerFile = true;
+        vm.Settings.PrintDirectlyAfterProcessing = false;
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Equal(2, vm.OutputFileCount);
+        Assert.Contains("فشل", vm.StatusText);
+        Assert.Contains(vm.Log, line => line.Contains("bad.pdf"));
+    }
+
+    /// <summary>والملف البايظ لازم يتقال بالاسم، مش "حصل خطأ" وخلاص.</summary>
+    [Fact]
+    public async Task The_Failed_File_Is_Named_In_The_Log()
+    {
+        var merge = new FakeMergeService();
+        merge.FailFor.Add("تالف.pdf");
+
+        var vm = CreateViewModel(mergeService: merge, pdfInfo: new FakePdfInfoService { PageCount = 1 });
+        vm.AddFiles(new[] { MakeFile("سليم.pdf"), MakeFile("تالف.pdf") });
+        vm.Settings.MergeFiles = false;
+        vm.Settings.NumberPagesPerFile = true;
+        vm.Settings.PrintDirectlyAfterProcessing = false;
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Contains(vm.Log, line => line.Contains("تالف.pdf"));
+        Assert.DoesNotContain(vm.Log, line => line.Contains("سليم.pdf") && line.Contains("فشل"));
+    }
+
+    /// <summary>
+    /// مفيش ترقيم ولا علامة مائية ولا نص؟ يبقى إعادة كتابة الملفات هدر —
+    /// وكمان بتضيّع جودة الأصل من غير أي فايدة. بنطبع الأصول زي ما هي.
+    /// </summary>
+    [Fact]
+    public async Task Files_Are_Not_Rewritten_When_There_Is_Nothing_To_Add()
+    {
+        var merge = new FakeMergeService();
+        var vm = CreateViewModel(mergeService: merge);
+
+        vm.AddFiles(new[] { MakeFile("a.pdf"), MakeFile("b.pdf") });
+        vm.Settings.MergeFiles = false;
+        vm.Settings.NumberPagesPerFile = false;
+        vm.App.WatermarkEnabled = false;
+        vm.App.CustomTextEnabled = false;
+        vm.Settings.PrintDirectlyAfterProcessing = false;
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Empty(merge.Requests);
+        Assert.Equal(2, vm.OutputFileCount);
+    }
+
+    /// <summary>كل ملف لازم يروح لمسار مختلف، حتى لو الأصول بنفس الاسم.</summary>
+    [Fact]
+    public async Task Files_With_The_Same_Name_Get_Different_Outputs()
+    {
+        var merge = new FakeMergeService { PageCount = 1 };
+        var vm = CreateViewModel(mergeService: merge, pdfInfo: new FakePdfInfoService { PageCount = 1 });
+
+        string first = MakeFile("فاتورة.pdf");
+        string nested = Path.Combine(_tempFolder, "تاني");
+        Directory.CreateDirectory(nested);
+        string second = Path.Combine(nested, "فاتورة.pdf");
+        File.WriteAllText(second, "test");
+
+        vm.AddFiles(new[] { first, second });
+        vm.Settings.MergeFiles = false;
+        vm.Settings.NumberPagesPerFile = true;
+        vm.Settings.PrintDirectlyAfterProcessing = false;
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        var outputs = merge.Requests.Select(r => r.OutputPath).ToList();
+        Assert.Equal(2, outputs.Distinct().Count());
+    }
+
     [Fact]
     public void Sorting_By_Name_Reorders_Files()
     {
@@ -662,14 +797,29 @@ public class MainViewModelTests : IDisposable
 
     private sealed class FakeMergeService : IPdfMergeService
     {
-        public MergeRequest? LastRequest { get; private set; }
+        public MergeRequest? LastRequest => Requests.LastOrDefault();
+
+        /// <summary>كل الطلبات بالترتيب — وضع "من غير دمج" بيعمل طلب لكل ملف.</summary>
+        public List<MergeRequest> Requests { get; } = new();
 
         /// <summary>لو اتحدد، بيرجّع العدد ده بدل عدد الملفات — عشان نختبر تمرير عدد الصفحات.</summary>
         public int? PageCount { get; set; }
 
+        /// <summary>أسامي ملفات مصدر المفروض الدمج يفشل معاها (محاكاة ملف تالف).</summary>
+        public List<string> FailFor { get; } = new();
+
         public MergeResult Merge(MergeRequest request)
         {
-            LastRequest = request;
+            Requests.Add(request);
+
+            string? bad = request.InputFiles.FirstOrDefault(
+                f => FailFor.Any(name => Path.GetFileName(f) == name));
+
+            if (bad is not null)
+            {
+                return MergeResult.Failed($"الملف \"{Path.GetFileName(bad)}\" تالف أو مش PDF سليم.");
+            }
+
             Directory.CreateDirectory(Path.GetDirectoryName(request.OutputPath)!);
             File.WriteAllText(request.OutputPath, "merged");
 
@@ -683,7 +833,12 @@ public class MainViewModelTests : IDisposable
     {
         public int? PageCount { get; set; }
 
+        /// <summary>null = مقدرناش نقرا المقاس، فالمعاينة بتفضل على A4.</summary>
+        public (double Width, double Height)? PageSize { get; set; }
+
         public int? TryGetPageCount(string filePath) => PageCount;
+
+        public (double Width, double Height)? TryGetPageSize(string filePath) => PageSize;
     }
 
     private sealed class FakePrintService : IPdfPrintService

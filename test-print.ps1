@@ -62,6 +62,27 @@ if (-not $sumatra) {
     throw "SumatraPDF.exe not found. Looked in publish\tools\, tools\ and the current folder."
 }
 
+# Verify it IS SumatraPDF. A file named SumatraPDF.exe that is something else
+# accepts the arguments, exits 0, and prints nothing - which looks like success.
+# Real SumatraPDF is ~20 MB. Anything much smaller is a different program.
+$sumatraMb = [math]::Round((Get-Item $sumatra).Length / 1MB, 1)
+$sumatraProduct = (Get-Item $sumatra).VersionInfo.ProductName
+
+if ($sumatraMb -lt 5 -or ($sumatraProduct -and $sumatraProduct -notmatch 'SumatraPDF')) {
+    Write-Host ""
+    Write-Host "  >>> THIS IS NOT SUMATRAPDF <<<" -ForegroundColor Magenta
+    Write-Host "  $sumatra" -ForegroundColor Magenta
+    Write-Host "  size = $sumatraMb MB   ProductName = '$sumatraProduct'" -ForegroundColor Magenta
+    Write-Host "  Real SumatraPDF is about 20 MB with ProductName = SumatraPDF." -ForegroundColor Magenta
+    Write-Host ""
+    Write-Host "  A stale publish\ folder is the usual cause. Refresh it:" -ForegroundColor Yellow
+    Write-Host "    .\build.ps1" -ForegroundColor Yellow
+    Write-Host "  or copy it by hand:" -ForegroundColor Yellow
+    Write-Host "    Copy-Item .\tools\SumatraPDF.exe .\publish\tools\ -Force" -ForegroundColor Yellow
+    Write-Host ""
+    return
+}
+
 # ---------- no printer given: list them and stop ----------
 
 if (-not $Printer) {

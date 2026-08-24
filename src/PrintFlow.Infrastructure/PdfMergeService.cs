@@ -395,8 +395,13 @@ public class PdfMergeService : IPdfMergeService
     }
 
     /// <summary>
-    /// بيرجّع رقم الصفحة وإجماليها. لو الترقيم لكل ملف، الأرقام بتبدأ من 1 مع كل ملف
-    /// والإجمالي بيبقى صفحات الملف ده — وده اللي اسم الخيار بيقوله فعلًا.
+    /// بيرجّع رقم الصفحة وإجماليها.
+    ///
+    /// تلات حالات:
+    ///   • ترقيم لكل ملف + دمج → كل ملف جوه المستند المدموج بيبدأ من ١
+    ///   • ترقيم متصل + دمج → ١..إجمالي المستند
+    ///   • من غير دمج → FirstPageNumber و TotalPages بييجوا من بره،
+    ///     عشان الملفات المنفصلة تفضل مترقّمة ورا بعض
     /// </summary>
     private static (int Number, int Total) ResolveNumbering(
         PageNumberStyle style,
@@ -404,9 +409,12 @@ public class PdfMergeService : IPdfMergeService
         int pageIndex,
         int documentPageCount)
     {
+        // صفر معناها "استخدم عدد صفحات المستند ده" — السلوك الطبيعي في الدمج
+        int total = style.TotalPages > 0 ? style.TotalPages : documentPageCount;
+
         if (!style.RestartForEachFile)
         {
-            return (pageIndex + 1, documentPageCount);
+            return (style.FirstPageNumber + pageIndex, total);
         }
 
         foreach (var range in ranges)
@@ -417,7 +425,7 @@ public class PdfMergeService : IPdfMergeService
             }
         }
 
-        return (pageIndex + 1, documentPageCount);
+        return (style.FirstPageNumber + pageIndex, total);
     }
 
     private static XBrush SolidBrush(string hex, RgbColor fallback)

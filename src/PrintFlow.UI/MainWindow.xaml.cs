@@ -36,6 +36,7 @@ public partial class MainWindow : Window
             new WindowsFontCatalog(),
             _jobLog,
             new PdfInfoService(),
+            new PdfSlideComposer(),
             ReadVersion());
 
         DataContext = _viewModel;

@@ -20,13 +20,25 @@ public static class SpoolTimeoutPolicy
     public static readonly TimeSpan Minimum = TimeSpan.FromMinutes(5);
 
     /// <summary>سقف نهائي — بعد كده الجوب اتعلّق فعلًا مش بس بطيء.</summary>
-    public static readonly TimeSpan Maximum = TimeSpan.FromMinutes(120);
+    public static readonly TimeSpan Maximum = TimeSpan.FromMinutes(240);
 
     /// <summary>لما مانعرفش عدد الصفحات، بنسيب مهلة واسعة بدل ما نقطع شغل شغال.</summary>
-    public static readonly TimeSpan WhenPageCountIsUnknown = TimeSpan.FromMinutes(15);
+    public static readonly TimeSpan WhenPageCountIsUnknown = TimeSpan.FromMinutes(30);
 
-    /// <summary>كام صفحة مطبوعة بنحسبلها دقيقة. متحسوبة على ماكينة بطيئة عن قصد.</summary>
-    private const int PagesPerMinute = 100;
+    /// <summary>
+    /// كام صفحة بيسبّلها SumatraPDF في الدقيقة.
+    ///
+    /// الرقم ده **متقاس مش متخمّن**: ٢٢ صفحة أخدت ١٣٠.٩ ثانية على طابعة حقيقية
+    /// = ٦ ثواني للصفحة = حوالي ١٠ صفحات في الدقيقة.
+    ///
+    /// أول نسخة كانت مكتوب فيها ١٠٠ صفحة/دقيقة — تخمين طلع أسرع من الواقع
+    /// بعشر مرات، وكان معناه إن ملف ٢١٠ صفحة (محتاج ~٢١ دقيقة) هياخد مهلة
+    /// ٧ دقايق بس ويتقتل في نص الطباعة. نفس الباج الأصلي بالظبط بس بأرقام أكبر.
+    ///
+    /// ملاحظة: القياس اتعمل على طابعة واحدة. الدرايفرات بتختلف كتير في السرعة،
+    /// فالرقم مظبوط ناحية الأمان (بطيء) عن قصد.
+    /// </summary>
+    private const int PagesPerMinute = 10;
 
     public static TimeSpan For(int pageCount, int copies)
     {

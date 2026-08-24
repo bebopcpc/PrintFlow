@@ -32,4 +32,29 @@ public sealed class PdfInfoService : IPdfInfoService
             return null;
         }
     }
+
+    public (double Width, double Height)? TryGetPageSize(string filePath)
+    {
+        try
+        {
+            if (!File.Exists(filePath))
+            {
+                return null;
+            }
+
+            using var document = PdfReader.Open(filePath, PdfDocumentOpenMode.Import);
+
+            if (document.PageCount == 0)
+            {
+                return null;
+            }
+
+            var page = document.Pages[0];
+            return (page.Width.Point, page.Height.Point);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }

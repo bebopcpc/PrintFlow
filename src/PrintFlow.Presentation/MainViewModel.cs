@@ -19,6 +19,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly IPresetStore? _presetStore;
     private readonly IJobLog? _jobLog;
     private readonly IPdfInfoService? _pdfInfo;
+    private readonly IPdfSlideComposer? _slideComposer;
 
     private List<string> _outputFiles = new();
 
@@ -34,10 +35,12 @@ public sealed class MainViewModel : ObservableObject
         IFontCatalog? fontCatalog = null,
         IJobLog? jobLog = null,
         IPdfInfoService? pdfInfo = null,
+        IPdfSlideComposer? slideComposer = null,
         string appVersion = "")
     {
         _jobLog = jobLog;
         _pdfInfo = pdfInfo;
+        _slideComposer = slideComposer;
         AppVersion = appVersion;
 
         _printerRepository = printerRepository ?? throw new ArgumentNullException(nameof(printerRepository));
@@ -82,6 +85,7 @@ public sealed class MainViewModel : ObservableObject
         {
             ProcessCommand.RaiseCanExecuteChanged();
             OnPropertyChanged(nameof(FilesCountText));
+            RefreshBookletSummary();
         };
 
         Settings.PropertyChanged += (_, e) =>
@@ -90,7 +94,25 @@ public sealed class MainViewModel : ObservableObject
             {
                 OnPropertyChanged(nameof(SinglePrinterMode));
             }
+
+            // أي إعداد بيغيّر شكل الورقة لازم يحدّث المعاينة على طول
+            if (e.PropertyName is nameof(PrintSettings.SlidesPerSheet)
+                or nameof(PrintSettings.SlideOrientation)
+                or nameof(PrintSettings.SlideOrder)
+                or nameof(PrintSettings.SlideStart)
+                or nameof(PrintSettings.SlideMargin))
+            {
+                RefreshSlidePreview();
+            }
+
+            if (e.PropertyName is nameof(PrintSettings.BookletMode)
+                or nameof(PrintSettings.BookletStart))
+            {
+                RefreshBookletSummary();
+            }
         };
+
+        RefreshSlidePreview();
 
         // كان الإعداد ده بيتحفظ ومحدش بينده SortFiles — يعني الاختيار مالوش أي أثر
         App.PropertyChanged += (_, e) =>
@@ -161,6 +183,132 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>قايمة اختيار الطابعة الواحدة بتتقفل لما المستخدم يفعّل وضع "أكتر من طابعة".</summary>
     public bool SinglePrinterMode => !Settings.UseMultiplePrinters;
+
+    /// <summary>كام مستند جاهز للطباعة بعد المعالجة. في وضع الدمج بيبقى ١.</summary>
+    public int OutputFileCount => _outputFiles.Count;
+
+    // ══════════ معاينة الشرائح ══════════
+
+    /// <summary>أقصى مقاس لمربع المعاينة بالبكسل.</summary>
+    private const double PreviewMaxWidth = 148;
+    private const double PreviewMaxHeight = 196;
+
+    /// <summary>A4 بالنقطة — الافتراض لما مايكونش في ملفات محمّلة.</summary>
+    private static readonly (double Width, double Height) A4 = (595, 842);
+
+    /// <summary>مقاس أول صفحة في أول ملف — التقسيم بيعتمد عليه.</summary>
+    private (double Width, double Height)? _sourcePageSize;
+
+    public ObservableCollection<SlidePreviewCell> SlidePreview { get; } = new();
+
+    private double _slidePreviewWidth = PreviewMaxWidth;
+    public double SlidePreviewWidth
+    {
+        get => _slidePreviewWidth;
+        private set => SetProperty(ref _slidePreviewWidth, value);
+    }
+
+    private double _slidePreviewHeight = PreviewMaxHeight;
+    public double SlidePreviewHeight
+    {
+        get => _slidePreviewHeight;
+        private set => SetProperty(ref _slidePreviewHeight, value);
+    }
+
+    private string _bookletSummary = "";
+    /// <summary>كام ورقة وكام صفحة فاضية — قبل ما المستخدم يشغّل المعالجة.</summary>
+    public string BookletSummary
+    {
+        get => _bookletSummary;
+        private set => SetProperty(ref _bookletSummary, value);
+    }
+
+    /// <summary>
+    /// بيحسب شكل الكتيّب من عدد صفحات الملفات المحمّلة.
+    /// أهم حاجة فيه إنه بيقول عدد الصفحات الفاضية **قبل** الطباعة —
+    /// عشان اللي على الماكينة ماياخدش باله منها بعد ما الورق يطلع.
+    /// </summary>
+    private void RefreshBookletSummary()
+    {
+        if (!Settings.BookletMode)
+        {
+            BookletSummary = "";
+            return;
+        }
+
+        int pages = Files.Sum(f => f.PageCount ?? 0);
+
+        if (pages == 0)
+        {
+            BookletSummary = "حمّل ملفات عشان نحسبلك الورق المطلوب.";
+            return;
+        }
+
+        int sheets = BookletImposition.SheetCount(pages);
+        int blanks = BookletImposition.PaddedPageCount(pages) - pages;
+
+        BookletSummary = blanks == 0
+            ? $"{pages} صفحة على {sheets} ورقة بوش وضهر."
+            : $"{pages} صفحة على {sheets} ورقة بوش وضهر، و{blanks} صفحة فاضية في الآخر.";
+    }
+
+    private string _slideLayoutSummary = "";
+    /// <summary>وصف التقسيم بالكلام — "٣ صفوف × ٢ أعمدة".</summary>
+    public string SlideLayoutSummary
+    {
+        get => _slideLayoutSummary;
+        private set => SetProperty(ref _slideLayoutSummary, value);
+    }
+
+    /// <summary>
+    /// بتحسب المعاينة من **نفس** دوال SheetLayout اللي بتحسب الطباعة.
+    ///
+    /// ده مقصود: لو المعاينة كان ليها حسابات خاصة بيها، أي تعديل في الطباعة
+    /// كان هيخلي المعاينة تكذب على المستخدم من غير ما حد ياخد باله.
+    /// </summary>
+    public void RefreshSlidePreview()
+    {
+        var source = _sourcePageSize ?? A4;
+
+        // شكل الورقة: نفس المقاس مقلوب حسب الاتجاه المطلوب
+        double longSide = Math.Max(source.Width, source.Height);
+        double shortSide = Math.Min(source.Width, source.Height);
+
+        var (sheetWidth, sheetHeight) = Settings.SlideOrientation == PageOrientation.Landscape
+            ? (longSide, shortSide)
+            : (shortSide, longSide);
+
+        int perSheet = Math.Max(1, Settings.SlidesPerSheet);
+
+        var grid = SheetLayout.ChooseGrid(
+            perSheet, sheetWidth, sheetHeight, source.Width, source.Height, Settings.SlideMargin);
+
+        double scale = Math.Min(PreviewMaxWidth / sheetWidth, PreviewMaxHeight / sheetHeight);
+        SlidePreviewWidth = sheetWidth * scale;
+        SlidePreviewHeight = sheetHeight * scale;
+
+        SlidePreview.Clear();
+
+        for (int i = 0; i < grid.Capacity; i++)
+        {
+            var slot = SheetLayout.SlotFor(
+                i, grid, sheetWidth, sheetHeight, source.Width, source.Height,
+                Settings.SlideMargin, Settings.SlideOrder, Settings.SlideStart);
+
+            SlidePreview.Add(new SlidePreviewCell
+            {
+                Number = i + 1,
+                X = slot.X * scale,
+                Y = slot.Y * scale,
+                Width = slot.Width * scale,
+                Height = slot.Height * scale
+            });
+        }
+
+        SlideLayoutSummary = perSheet <= 1
+            ? "كل صفحة على ورقة لوحدها"
+            : $"{grid.Rows} صف × {grid.Columns} عمود على الورقة الواحدة";
+    }
 
     public string FilesCountText
     {
@@ -506,6 +654,21 @@ public sealed class MainViewModel : ObservableObject
         }
 
         OnPropertyChanged(nameof(FilesCountText));
+        RefreshBookletSummary();
+
+        // مقاس أول صفحة بيحدد تقسيم الورقة، فالمعاينة لازم تعرفه. من غيره
+        // كانت هتفترض A4 طولية وتوري شكل غلط لشغل البوربوينت العرضي.
+        if (Files.Count > 0)
+        {
+            string first = Files[0].FullPath;
+            var size = await Task.Run(() => _pdfInfo.TryGetPageSize(first));
+
+            if (size != _sourcePageSize)
+            {
+                _sourcePageSize = size;
+                RefreshSlidePreview();
+            }
+        }
 
         // لو الترتيب بعدد الصفحات، دلوقتي بس بقى عندنا الأرقام
         if (App.FileSortOrder == FileSortOrder.ByPageCount)
@@ -679,13 +842,10 @@ public sealed class MainViewModel : ObservableObject
                 Directory.CreateDirectory(outputFolder);
                 string outputPath = Path.Combine(outputFolder, $"merged_{DateTime.Now:yyyyMMdd_HHmmss}.pdf");
 
-                // كل أشكال العلامة المائية والترقيم والنص المخصص بتتجمّع هنا في طلب واحد
                 _jobLog?.Info($"بدء معالجة {inputs.Count} ملف → {outputPath}");
 
-            var request = MergeRequest.From(Settings, App, inputs, outputPath);
-
-                // الدمج بيتعمل على ثريد تاني عشان الواجهة ماتتجمدش على ملفات كبيرة
-                var result = await Task.Run(() => _mergeService.Merge(request));
+                var request = MergeRequest.From(Settings, App, inputs, outputPath);
+                var result = await RunPipelineAsync(request);
 
                 Log.Add(result.Message);
                 _jobLog?.Info(result.Message);
@@ -704,11 +864,7 @@ public sealed class MainViewModel : ObservableObject
             }
             else
             {
-                // TODO: المعالجة لكل ملف على حدة (علامة مائية/ترقيم من غير دمج)
-                // محتاجة توسعة IPdfMergeService — دلوقتي بنطبع الملفات زي ما هي.
-                _outputFiles = inputs;
-                _outputPageCount = Files.Sum(f => f.PageCount ?? 0);
-                StatusText = $"جاهز لطباعة {inputs.Count} ملف كل واحد لوحده (من غير معالجة).";
+                await ProcessWithoutMergingAsync(inputs);
             }
         }
         finally
@@ -721,6 +877,250 @@ public sealed class MainViewModel : ObservableObject
         {
             await PrintAsync();
         }
+    }
+
+    /// <summary>
+    /// السلسلة الكاملة لمستند واحد: دمج ← إضافات على الصفحة ← تجميع شرائح
+    /// ← إضافات على الورقة.
+    ///
+    /// لما مايكونش في تجميع شرائح، كل ده بيرجع خطوة واحدة زي الأول بالظبط —
+    /// ومفيش ملفات مؤقتة أصلًا.
+    /// </summary>
+    private async Task<MergeResult> RunPipelineAsync(MergeRequest request)
+    {
+        // مفيش شرائح؟ كل الإضافات بتتحط مرة واحدة والخلاص
+        if (Settings.SlidesPerSheet <= 1 || _slideComposer is null)
+        {
+            return await Task.Run(() => _mergeService.Merge(request));
+        }
+
+        var before = SlidePipeline.BeforeSlides(App);
+        var after = SlidePipeline.AfterSlides(App);
+
+        string stem = Path.Combine(
+            Path.GetDirectoryName(request.OutputPath)!,
+            Path.GetFileNameWithoutExtension(request.OutputPath));
+
+        string merged = stem + ".stage1.pdf";
+        string composed = stem + ".stage2.pdf";
+
+        try
+        {
+            // ١) الدمج + الإضافات اللي على الصفحة الأصلية
+            var mergeResult = await Task.Run(
+                () => _mergeService.Merge(request.KeepOnly(before) with { OutputPath = merged }));
+
+            if (!mergeResult.Success)
+            {
+                return mergeResult;
+            }
+
+            // ٢) تجميع الشرائح على الورق
+            var slideRequest = SlideRequest.From(Settings, merged, composed);
+            var slideResult = await Task.Run(() => _slideComposer.Compose(slideRequest));
+
+            if (!slideResult.Success)
+            {
+                return slideResult;
+            }
+
+            // ٣) الإضافات اللي على الورقة كاملة
+            if (after.Nothing || !request.KeepOnly(after).HasAnyOverlay)
+            {
+                File.Move(composed, request.OutputPath, overwrite: true);
+
+                return MergeResult.Succeeded(
+                    $"{mergeResult.Message.Replace("[نجاح] ", "")} — {slideResult.Message.Replace("[نجاح] ", "")}",
+                    slideResult.PageCount);
+            }
+
+            var finalResult = await Task.Run(() => _mergeService.Merge(
+                request.KeepOnly(after) with
+                {
+                    InputFiles = [composed],
+                    OutputPath = request.OutputPath
+                }));
+
+            if (!finalResult.Success)
+            {
+                return finalResult;
+            }
+
+            return MergeResult.Succeeded(
+                $"{mergeResult.Message.Replace("[نجاح] ", "")} — {slideResult.Message.Replace("[نجاح] ", "")}",
+                finalResult.PageCount);
+        }
+        finally
+        {
+            // الملفات الوسيطة مالهاش لازمة بعد كده، ومش عايزين نسيبها
+            // تتراكم في التيمب على أجهزة المطابع
+            TryDelete(merged);
+            TryDelete(composed);
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // ملف مؤقت فضل موجود مش سبب نوقف الطباعة
+        }
+    }
+
+    /// <summary>
+    /// وضع "من غير دمج": كل ملف بيتعالج لوحده وبيطلع ملف ناتج لوحده.
+    ///
+    /// فرقين مقصودين عن وضع الدمج:
+    ///
+    /// ١) **ملف بايظ مابيوقفش الباقي.** في الدمج ده منطقي — مستند واحد ناقص
+    ///    منه جزء يبقى غلط. هنا الملفات مستقلة، واللي واقف على الماكينة
+    ///    محمّل ٢٠ ملف؛ إنه يخسر الـ ١٩ السليمين عشان واحد بايظ ده مش
+    ///    سلوك برنامج مطبعة. بنعالج اللي ينفع ونقول بالاسم اللي مانفعش.
+    ///
+    /// ٢) **الترقيم بيفضل متصل عبر الملفات المنفصلة** لو المستخدم مختار
+    ///    الترقيم المتصل: الملف الأول ١..٥ والتاني بيكمّل من ٦ من ٤٠.
+    ///    عشان كده بنعد الصفحات كلها الأول قبل ما نبدأ نعالج.
+    /// </summary>
+    private async Task ProcessWithoutMergingAsync(IReadOnlyList<string> inputs)
+    {
+        var overlays = MergeRequest.From(Settings, App, inputs, string.Empty);
+
+        // مفيش أي حاجة تتحط على الورق؟ يبقى إعادة كتابة الملفات هدر خالص —
+        // بنطبع الأصول زي ما هي، وده كمان بيحافظ على جودتها بالظبط.
+        if (overlays.PageNumbers is null && overlays.Watermark is null && overlays.CustomText is null)
+        {
+            _outputFiles = inputs.ToList();
+            _outputPageCount = Files.Sum(f => f.PageCount ?? 0);
+            StatusText = $"جاهز لطباعة {inputs.Count} ملف كل واحد لوحده (مفيش إضافات مطلوبة).";
+            _jobLog?.Info($"وضع من غير دمج: {inputs.Count} ملف هتتطبع زي ما هي");
+            return;
+        }
+
+        string folder = ResolveProcessedOutputFolder();
+        Directory.CreateDirectory(folder);
+        _jobLog?.Info($"بدء معالجة {inputs.Count} ملف كل واحد لوحده → {folder}");
+
+        // عدّ الصفحات الأول: الترقيم المتصل محتاج يعرف الإجمالي قبل ما يبدأ
+        var pageCounts = await CountPagesAsync(inputs);
+        int grandTotal = pageCounts.Where(c => c > 0).Sum();
+
+        var produced = new List<string>();
+        var failures = new List<string>();
+        int nextNumber = 1;
+        int totalProcessedPages = 0;
+
+        for (int i = 0; i < inputs.Count; i++)
+        {
+            string source = inputs[i];
+            string name = ProcessedFileNaming.NameFor(i + 1, source);
+            name = ProcessedFileNaming.MakeUnique(name, candidate => File.Exists(Path.Combine(folder, candidate)));
+            string destination = Path.Combine(folder, name);
+
+            StatusText = $"جاري المعالجة: {i + 1} من {inputs.Count} — {Path.GetFileName(source)}";
+
+            var request = overlays with
+            {
+                InputFiles = [source],
+                OutputPath = destination,
+                PageNumbers = overlays.PageNumbers?.ContinuingFrom(nextNumber, grandTotal)
+            };
+
+            var result = await RunPipelineAsync(request);
+
+            if (result.Success)
+            {
+                produced.Add(destination);
+                totalProcessedPages += result.PageCount;
+                nextNumber += result.PageCount;
+            }
+            else
+            {
+                failures.Add(result.Message);
+                Log.Add(result.Message);
+                _jobLog?.Info($"تخطّينا ملف: {result.Message}");
+
+                // الملف ده مالوش صفحات في المخرج، بس لو عرفنا عدده بنحرّك
+                // العداد عشان الترقيم يفضل مطابق للإجمالي المكتوب على الورق
+                if (i < pageCounts.Count && pageCounts[i] > 0)
+                {
+                    nextNumber += pageCounts[i];
+                }
+            }
+        }
+
+        _outputFiles = produced;
+        _outputPageCount = totalProcessedPages;
+
+        if (produced.Count == 0)
+        {
+            StatusText = "فشلت معالجة كل الملفات. شوف التفاصيل في اللوج.";
+            return;
+        }
+
+        string summary = failures.Count == 0
+            ? $"تمت معالجة {produced.Count} ملف في {totalProcessedPages} صفحة."
+            : $"تمت معالجة {produced.Count} ملف في {totalProcessedPages} صفحة، وفشل {failures.Count}.";
+
+        if (SavesProcessedFilesPermanently)
+        {
+            summary += $" اتحفظوا في {folder}";
+        }
+
+        Log.Add($"[نجاح] {summary}");
+        _jobLog?.Info(summary);
+        StatusText = summary;
+    }
+
+    /// <summary>
+    /// المستخدم طالب إن الملفات المعالجة تتحفظ عنده مش في التيمب؟
+    ///
+    /// "مجلد افتراضي لحفظ الملفات" كان بيتحفظ في الإعدادات ومحدش بيقراه —
+    /// المستخدم يختار مجلد ومايوصلهوش حاجة. دلوقتي هو وجهة الملفات المعالجة.
+    /// </summary>
+    private bool SavesProcessedFilesPermanently =>
+        Settings.SaveAfterProcessing && !string.IsNullOrWhiteSpace(App.DefaultOutputFolder);
+
+    private string ResolveProcessedOutputFolder()
+    {
+        if (SavesProcessedFilesPermanently && Directory.Exists(App.DefaultOutputFolder))
+        {
+            return App.DefaultOutputFolder;
+        }
+
+        // مجلد لكل تشغيلة: أسامي الملفات بتبدأ بـ 01 كل مرة، فمن غير الفصل ده
+        // تشغيلة النهارده هتدهس اللي قبلها
+        return Path.Combine(Path.GetTempPath(), "PrintFlow", $"batch_{DateTime.Now:yyyyMMdd_HHmmss}");
+    }
+
+    /// <summary>
+    /// عدد صفحات كل ملف بالترتيب. صفر = مقدرناش نقراه (تالف أو محمي).
+    /// بنستخدم اللي محمّل في القايمة لو موجود، وبنقرا الباقي من القرص.
+    /// </summary>
+    private async Task<IReadOnlyList<int>> CountPagesAsync(IReadOnlyList<string> inputs)
+    {
+        var known = Files.ToDictionary(f => f.FullPath, f => f.PageCount, StringComparer.OrdinalIgnoreCase);
+        var counts = new List<int>(inputs.Count);
+
+        foreach (string path in inputs)
+        {
+            if (known.TryGetValue(path, out int? cached) && cached is int value)
+            {
+                counts.Add(value);
+                continue;
+            }
+
+            int? read = _pdfInfo is null ? null : await Task.Run(() => _pdfInfo.TryGetPageCount(path));
+            counts.Add(read ?? 0);
+        }
+
+        return counts;
     }
 
     private async Task PrintAsync()
@@ -736,9 +1136,10 @@ public sealed class MainViewModel : ObservableObject
         // بنحدّث حالة الطابعات **لحظة الطباعة** مش بنعتمد على آخر تحديث دوري.
         //
         // ليه: معالجة ملف ٢١٠ صفحة بتاخد وقت، والطابعة ممكن تكون اتقفلت أو
-        // اتفصلت في الوقت ده. لو بعتنا لطابعة مش موجودة، SumatraPDF بيرجّع
-        // كود 0 عادي (بسبب -silent) والمستخدم بيقرا "نجاح" ومفيش ورقة طلعت.
-        // ده اتأكد عمليًا: تشغيلتين على طابعة مفصولة، الكود 0 والطابور فاضي.
+        // اتفصلت في الوقت ده. الفلترة على آخر حالة معروفة معناها إننا ممكن
+        // نبعت لطابعة اتفصلت من دقيقتين، ونستنى المهلة كلها على الفاضي.
+        //
+        // اتأكد بالتجربة: الـ HP كانت WorkOffline=True والبرنامج تخطّاها صح.
         try
         {
             await RefreshPrintersAsync();
@@ -876,6 +1277,16 @@ public sealed class MainViewModel : ObservableObject
                 if (File.GetLastWriteTime(path) < cutoff)
                 {
                     File.Delete(path);
+                }
+            }
+
+            // وضع "من غير دمج" بيعمل مجلد لكل تشغيلة. من غير التنضيف ده
+            // المجلدات دي بتتراكم للأبد — وكل واحد فيه نسخة من كل الملفات.
+            foreach (var path in Directory.EnumerateDirectories(folder, "batch_*"))
+            {
+                if (Directory.GetLastWriteTime(path) < cutoff)
+                {
+                    Directory.Delete(path, recursive: true);
                 }
             }
         }
