@@ -81,6 +81,25 @@ if (-not (Test-Path $sumatra)) {
     throw "SumatraPDF.exe مش موجود في مجلد tools. حمّله وحطه هناك الأول."
 }
 
+# ولازم يكون SumatraPDF **حقيقي**، مش أي ملف اتسمّى بالاسم ده.
+#
+# ليه الفحص ده موجود: فعلًا اتشحن ملف اسمه SumatraPDF.exe وهو مش هو —
+# برنامج Delphi حجمه 533 ك.ب من غير أي معلومات نسخة. مكانش بيفهم -print-to
+# خالص، بيرجّع كود 0 وميطبعش حاجة. الطباعة كانت "شغالة" في اللوج وميطلعش ورق.
+$sumatraInfo = (Get-Item $sumatra).VersionInfo
+
+if ($sumatraInfo.ProductName -notmatch 'SumatraPDF') {
+    $size = [math]::Round((Get-Item $sumatra).Length / 1MB, 1)
+    throw @"
+tools\SumatraPDF.exe مش SumatraPDF حقيقي.
+  ProductName = '$($sumatraInfo.ProductName)'   الحجم = $size م.ب
+النسخة السليمة معلوماتها ProductName = SumatraPDF وحجمها حوالي 20 م.ب.
+نزّل النسخة المحمولة 64-bit من sumatrapdfreader.org وحطها مكانه.
+"@
+}
+
+Write-Host "  SumatraPDF $($sumatraInfo.ProductVersion) - OK" -ForegroundColor DarkGray
+
 New-Item -ItemType Directory -Force -Path (Join-Path $publish 'tools') | Out-Null
 Copy-Item $sumatra (Join-Path $publish 'tools') -Force
 Copy-Item (Join-Path $root 'THIRD-PARTY-NOTICES.txt') $publish -Force
