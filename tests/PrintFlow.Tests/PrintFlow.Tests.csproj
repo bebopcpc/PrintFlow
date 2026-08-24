@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\src\PrintFlow.Domain\PrintFlow.Domain.csproj" />
     <ProjectReference Include="..\..\src\PrintFlow.Application\PrintFlow.Application.csproj" />
     <ProjectReference Include="..\..\src\PrintFlow.Infrastructure\PrintFlow.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\PrintFlow.Presentation\PrintFlow.Presentation.csproj" />
   </ItemGroup>
 
 </Project>

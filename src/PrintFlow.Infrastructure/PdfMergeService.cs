@@ -1,122 +1,450 @@
 using PdfSharp.Drawing;
+using PdfSharp.Fonts;
 using PdfSharp.Pdf;
 using PdfSharp.Pdf.IO;
-using PdfSharp.Fonts;
 using PrintFlow.Application;
+using PrintFlow.Domain;
 
 namespace PrintFlow.Infrastructure;
 
+/// <summary>
+/// بيدمج ملفات PDF وبيحط عليها الترقيم والعلامة المائية والنص المخصص.
+///
+/// كل الأشكال بقت بتيجي من AppSettings عن طريق MergeRequest. قبل كده كانت
+/// كل القيم مكتوبة في الكود (خط 40، رمادي، 45 درجة، الترقيم أسفل الشمال بحجم 10)
+/// والإعدادات موجودة في الواجهة ومش واصلة لحتة هنا خالص.
+/// </summary>
 public class PdfMergeService : IPdfMergeService
 {
+    /// <summary>خط الترقيم والنص المخصص — Arial لأنه فيه حروف عربية ومتسطّب على أي ويندوز.</summary>
+    private const string OverlayFontFamily = "Arial";
+
     static PdfMergeService()
     {
-        // نسجّل مصدر الخطوط مرة واحدة بس، أول ما الكلاس يتستخدم لأول مرة
-        if (GlobalFontSettings.FontResolver == null)
-        {
-            GlobalFontSettings.FontResolver = new AppFontResolver();
-        }
+        // شبكة أمان: المفروض App.OnStartup هي اللي بتسجّل مصدر الخطوط،
+        // بس لو حد استخدم الخدمة من غير ما يعدّي على التشغيل العادي (تست مثلًا)
+        // مايبقاش عندنا XFont من غير resolver.
+        PdfFonts.Register();
     }
 
-    public string MergeFiles(List<string> inputFilePaths, string outputPath, string? watermarkText = null, bool addPageNumbers = false)
+    public MergeResult Merge(MergeRequest request)
     {
-        if (inputFilePaths == null || inputFilePaths.Count == 0)
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (request.InputFiles.Count == 0)
         {
-            return "[فشل] لازم ملف واحد على الأقل.";
+            return MergeResult.Failed("لازم ملف واحد على الأقل.");
         }
+
+        var warnings = new List<string>();
 
         try
         {
-            using var outputDocument = new PdfDocument();
+            using var output = new PdfDocument();
 
-            foreach (var filePath in inputFilePaths)
+            // بنسجّل مدى صفحات كل ملف عشان نقدر نرقّم كل ملف من 1 لوحده
+            var fileRanges = new List<PageRange>();
+
+            foreach (string filePath in request.InputFiles)
             {
                 if (!File.Exists(filePath))
                 {
-                    return $"[فشل] الملف مش موجود: {filePath}";
+                    return MergeResult.Failed($"الملف مش موجود: {filePath}");
                 }
 
-                using var inputDocument = PdfReader.Open(filePath, PdfDocumentOpenMode.Import);
-                foreach (var page in inputDocument.Pages)
+                PdfDocument input;
+
+                try
                 {
-                    outputDocument.AddPage(page);
+                    input = PdfReader.Open(filePath, PdfDocumentOpenMode.Import);
+                }
+                catch (Exception ex)
+                {
+                    // مهم: بنمسك الفشل **لكل ملف على حدة** عشان نقول اسم الملف اللي وقع.
+                    // رسالة PdfSharp لوحدها إنجليزي تقني ومش بتذكر الملف، وده مش هيفيد
+                    // حد في مطبعة محمّل 20 ملف.
+                    return MergeResult.Failed(DescribeOpenFailure(filePath, ex));
+                }
+
+                using (input)
+                {
+                    int start = output.PageCount;
+
+                    foreach (var page in input.Pages)
+                    {
+                        output.AddPage(page);
+                    }
+
+                    fileRanges.Add(new PageRange(start, output.PageCount - start));
                 }
             }
 
-            if (addPageNumbers)
-            {
-                AddPageNumbers(outputDocument);
-            }
+            ApplyOverlays(output, request, fileRanges, warnings);
 
-            if (!string.IsNullOrWhiteSpace(watermarkText))
-            {
-                AddWatermarkToAllPages(outputDocument, watermarkText);
-            }
+            // لازم نقرا عدد الصفحات قبل الحفظ: PdfSharp بيقفل المستند بعد Save
+            // وأي قراءة بعد كده بترمي "document was already saved".
+            int pageCount = output.PageCount;
 
-            outputDocument.Save(outputPath);
+            output.Save(request.OutputPath);
 
-            string watermarkNote = string.IsNullOrWhiteSpace(watermarkText) ? "" : " مع علامة مائية";
-            string numbersNote = addPageNumbers ? " مع ترقيم صفحات" : "";
-            return $"[نجاح] تم دمج {inputFilePaths.Count} ملف{watermarkNote}{numbersNote} في: {outputPath}";
+            string summary = $"تم دمج {request.InputFiles.Count} ملف في {pageCount} صفحة" +
+                             DescribeExtras(request) +
+                             (warnings.Count > 0 ? $" — تنبيه: {string.Join("، ", warnings)}" : "");
+
+            return MergeResult.Succeeded(summary, pageCount);
         }
         catch (Exception ex)
         {
-            return $"[فشل] حصل خطأ أثناء الدمج: {ex.Message}";
+            return MergeResult.Failed($"حصل خطأ أثناء الدمج: {ex.Message}");
         }
     }
 
-    /// <summary>يكتب "صفحة X من Y" أسفل كل صفحة، على اليسار لتجنب التعارض مع محتوى المنتصف.</summary>
-    private static void AddPageNumbers(PdfDocument document)
+    // ══════════ الرسم فوق الصفحات ══════════
+
+    private static void ApplyOverlays(
+        PdfDocument document,
+        MergeRequest request,
+        IReadOnlyList<PageRange> fileRanges,
+        List<string> warnings)
     {
-        var font = new XFont("Arial", 10);
-        var brush = XBrushes.Black;
-        var format = new XStringFormat
+        if (request.PageNumbers is null && request.Watermark is null && request.CustomText is null)
         {
-            Alignment = XStringAlignment.Near, // اصطفاف لليسار
-            LineAlignment = XLineAlignment.Far // أسفل الصفحة
-        };
+            return;
+        }
 
-        int totalPages = document.PageCount;
+        XImage? watermarkImage = null;
+        XFont? watermarkFont = null;
+        XBrush? watermarkBrush = null;
 
-        for (int i = 0; i < totalPages; i++)
+        if (request.Watermark is { } watermark)
         {
-            var page = document.Pages[i];
-            using var gfx = XGraphics.FromPdfPage(page);
+            if (watermark.IsImage)
+            {
+                if (File.Exists(watermark.ImagePath))
+                {
+                    watermarkImage = XImage.FromFile(watermark.ImagePath);
+                }
+                else
+                {
+                    warnings.Add("صورة العلامة المائية مش موجودة، فاتخطّت");
+                }
+            }
+            else
+            {
+                watermarkFont = new XFont(
+                    watermark.FontFamily,
+                    watermark.FontSize,
+                    watermark.Bold ? XFontStyleEx.Bold : XFontStyleEx.Regular);
 
-            // عدلنا النص
-            string rawText = $"صفحة {i + 1} من {totalPages}";
-            string text = ArabicTextShaper.Reshape(rawText);
-            
-            // عملنا هامش 20 بيكسل من اليسار
-            var rect = new XRect(20, page.Height.Point - 30, page.Width.Point - 40, 20);
+                var color = HexColor.ParseOrDefault(watermark.ColorHex, new RgbColor(128, 128, 128));
+                watermarkBrush = new XSolidBrush(XColor.FromArgb(watermark.Alpha, color.R, color.G, color.B));
+            }
+        }
 
-            gfx.DrawString(text, font, brush, rect, format);
+        XFont? numberFont = request.PageNumbers is null
+            ? null
+            : new XFont(OverlayFontFamily, request.PageNumbers.FontSize);
+
+        XBrush? numberBrush = request.PageNumbers is null
+            ? null
+            : SolidBrush(request.PageNumbers.ColorHex, HexColor.Black);
+
+        XFont? customFont = request.CustomText is null
+            ? null
+            : new XFont(OverlayFontFamily, request.CustomText.FontSize);
+
+        XBrush? customBrush = request.CustomText is null
+            ? null
+            : SolidBrush(request.CustomText.ColorHex, HexColor.Black);
+
+        try
+        {
+            for (int i = 0; i < document.PageCount; i++)
+            {
+                var page = document.Pages[i];
+                using var gfx = XGraphics.FromPdfPage(page);
+
+                // العلامة المائية الأول عشان الترقيم والنص يفضلوا مقروءين فوقها
+                if (request.Watermark is { } style)
+                {
+                    DrawWatermark(gfx, page, style, watermarkImage, watermarkFont, watermarkBrush);
+                }
+
+                if (request.PageNumbers is { } numbers)
+                {
+                    var (number, total) = ResolveNumbering(numbers, fileRanges, i, document.PageCount);
+                    DrawText(
+                        gfx, page,
+                        $"صفحة {number} من {total}",
+                        numbers.Position, numbers.EdgeMargin, numbers.FontSize,
+                        numberFont!, numberBrush!,
+                        numbers.Backdrop ? BackdropFor(numbers.ColorHex) : null);
+                }
+
+                if (request.CustomText is { } custom)
+                {
+                    DrawText(
+                        gfx, page,
+                        custom.Text,
+                        custom.Position, custom.EdgeMargin, custom.FontSize,
+                        customFont!, customBrush!,
+                        backdrop: null);
+                }
+            }
+        }
+        finally
+        {
+            watermarkImage?.Dispose();
         }
     }
 
-    private static void AddWatermarkToAllPages(PdfDocument document, string text)
+    private static void DrawWatermark(
+        XGraphics gfx,
+        PdfPage page,
+        WatermarkStyle style,
+        XImage? image,
+        XFont? font,
+        XBrush? brush)
     {
-        // تشبيك الحروف العربية وترتيبها صح قبل الرسم (PDFsharp نفسه مش بيعمل ده تلقائيًا)
-        string displayText = ArabicTextShaper.Reshape(text);
-        var font = new XFont("Arial", 40, XFontStyleEx.Bold);
-        var brush = new XSolidBrush(XColor.FromArgb(70, 128, 128, 128));
+        if (style.IsImage ? image is null : font is null || brush is null)
+        {
+            return;
+        }
+
+        var visible = VisibleArea(page);
+        double width = visible.Width;
+        double height = visible.Height;
+        double centerX = visible.X + (width / 2);
+        double centerY = visible.Y + (height / 2);
+
+        var state = gfx.Save();
+
+        gfx.TranslateTransform(centerX, centerY);
+
+        // بالسالب عشان الزاوية الموجبة تطلع مايلة لفوق ناحية اليمين،
+        // وهو الشكل اللي الناس متعوّدة عليه في العلامة المائية.
+        gfx.RotateTransform(-style.RotationDegrees);
+        gfx.TranslateTransform(-centerX, -centerY);
+
+        if (style.IsImage)
+        {
+            // بنخلي عرض الصورة نص عرض الصفحة ونحافظ على النسبة
+            double targetWidth = width * 0.5;
+            double targetHeight = image!.PixelHeight * (targetWidth / image.PixelWidth);
+
+            gfx.DrawImage(image, centerX - (targetWidth / 2), centerY - (targetHeight / 2), targetWidth, targetHeight);
+        }
+        else
+        {
+            string text = ArabicTextShaper.Reshape(style.Text);
+            var format = new XStringFormat
+            {
+                Alignment = XStringAlignment.Center,
+                LineAlignment = XLineAlignment.Center
+            };
+
+            gfx.DrawString(text, font!, brush!, new XRect(visible.X, visible.Y, width, height), format);
+        }
+
+        gfx.Restore(state);
+    }
+
+    private static void DrawText(
+        XGraphics gfx,
+        PdfPage page,
+        string rawText,
+        ContentPosition position,
+        int edgeMargin,
+        int fontSize,
+        XFont font,
+        XBrush brush,
+        XBrush? backdrop)
+    {
+        if (string.IsNullOrWhiteSpace(rawText))
+        {
+            return;
+        }
+
+        var visible = VisibleArea(page);
+
+        var box = OverlayPlacement.Calculate(
+            position,
+            visible.Width,
+            visible.Height,
+            edgeMargin,
+            fontSize * 1.4);
+
         var format = new XStringFormat
         {
-            Alignment = XStringAlignment.Center,
+            Alignment = box.Horizontal switch
+            {
+                HorizontalAlign.Left => XStringAlignment.Near,
+                HorizontalAlign.Center => XStringAlignment.Center,
+                _ => XStringAlignment.Far
+            },
             LineAlignment = XLineAlignment.Center
         };
 
-        foreach (var page in document.Pages)
+        string shaped = ArabicTextShaper.Reshape(rawText);
+        var target = new XRect(visible.X + box.X, visible.Y + box.Y, box.Width, box.Height);
+
+        if (backdrop is not null)
         {
-            using var gfx = XGraphics.FromPdfPage(page);
-
-            double centerX = page.Width / 2;
-            double centerY = page.Height / 2;
-
-            gfx.TranslateTransform(centerX, centerY);
-            gfx.RotateTransform(-45);
-            gfx.TranslateTransform(-centerX, -centerY);
-
-            gfx.DrawString(displayText, font, brush, new XRect(0, 0, page.Width, page.Height), format);
+            DrawBackdrop(gfx, shaped, font, format, target, backdrop, fontSize);
         }
+
+        gfx.DrawString(shaped, font, brush, target, format);
+    }
+
+    /// <summary>
+    /// لوحة صغيرة ورا النص على قد عرضه بالظبط + هامش بسيط.
+    ///
+    /// بنقيس النص الأول عشان اللوحة ماتبقاش شريط على عرض الصفحة كلها،
+    /// وبنحاذيها بنفس محاذاة النص (شمال/نص/يمين).
+    /// </summary>
+    private static void DrawBackdrop(
+        XGraphics gfx,
+        string shaped,
+        XFont font,
+        XStringFormat format,
+        XRect target,
+        XBrush backdrop,
+        int fontSize)
+    {
+        var size = gfx.MeasureString(shaped, font);
+
+        double padX = fontSize * 0.45;
+        double padY = fontSize * 0.22;
+        double width = Math.Min(size.Width + padX * 2, target.Width);
+        double height = Math.Min(size.Height + padY * 2, target.Height + padY * 2);
+
+        double x = format.Alignment switch
+        {
+            XStringAlignment.Near => target.X,
+            XStringAlignment.Center => target.X + (target.Width - width) / 2,
+            _ => target.X + target.Width - width
+        };
+
+        double y = target.Y + (target.Height - height) / 2;
+        double radius = Math.Min(height / 2, fontSize * 0.5);
+
+        gfx.DrawRoundedRectangle(backdrop, new XRect(x, y, width, height), new XSize(radius, radius));
+    }
+
+    /// <summary>
+    /// لون اللوحة اتحسب من لون الرقم نفسه: رقم غامق → لوحة فاتحة، والعكس.
+    /// شبه شفافة عشان ما تخفيش محتوى المستند اللي تحتها.
+    /// </summary>
+    private static XBrush BackdropFor(string numberColorHex)
+    {
+        var color = HexColor.ParseOrDefault(numberColorHex, HexColor.Black);
+
+        return color.IsLight
+            ? new XSolidBrush(XColor.FromArgb(190, 0, 0, 0))
+            : new XSolidBrush(XColor.FromArgb(190, 255, 255, 255));
+    }
+
+    // ══════════ مساعدات ══════════
+
+    private readonly record struct PageRange(int Start, int Count);
+
+    /// <summary>
+    /// بيحوّل صناديق صفحة PdfSharp لأرقام، والحساب نفسه في
+    /// <see cref="VisiblePageArea"/> — دالة خالصة متختبرة لوحدها.
+    /// </summary>
+    private static VisiblePageArea VisibleArea(PdfPage page)
+    {
+        var media = page.MediaBox;
+        var crop = page.CropBox;
+
+        if (crop is null || media is null)
+        {
+            return new VisiblePageArea(0, 0, page.Width.Point, page.Height.Point);
+        }
+
+        return VisiblePageArea.Calculate(
+            media.X1, media.Y2,
+            crop.X1, crop.Y2, crop.Width, crop.Height,
+            page.Width.Point, page.Height.Point);
+    }
+
+    /// <summary>
+    /// بيحوّل فشل فتح ملف لرسالة عربية بتقول **اسم الملف** و**سبب مفهوم**.
+    ///
+    /// PdfSharp بيرمي رسايل زي "The StartXRef table could not be found" —
+    /// صحيحة تقنيًا وملهاش أي معنى للي واقف على الماكينة.
+    /// </summary>
+    private static string DescribeOpenFailure(string filePath, Exception exception)
+    {
+        string name = Path.GetFileName(filePath);
+        string reason = exception.Message;
+
+        if (reason.Contains("password", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"الملف \"{name}\" محمي بكلمة مرور. شيل الحماية أو استبعده من القايمة.";
+        }
+
+        if (reason.Contains("not a valid PDF", StringComparison.OrdinalIgnoreCase) ||
+            reason.Contains("StartXRef", StringComparison.OrdinalIgnoreCase) ||
+            reason.Contains("cannot be opened", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"الملف \"{name}\" تالف أو مش PDF سليم. جرّب تفتحه بقارئ PDF عادي عشان تتأكد.";
+        }
+
+        return $"مقدرناش نفتح الملف \"{name}\": {reason}";
+    }
+
+    /// <summary>
+    /// بيرجّع رقم الصفحة وإجماليها. لو الترقيم لكل ملف، الأرقام بتبدأ من 1 مع كل ملف
+    /// والإجمالي بيبقى صفحات الملف ده — وده اللي اسم الخيار بيقوله فعلًا.
+    /// </summary>
+    private static (int Number, int Total) ResolveNumbering(
+        PageNumberStyle style,
+        IReadOnlyList<PageRange> ranges,
+        int pageIndex,
+        int documentPageCount)
+    {
+        if (!style.RestartForEachFile)
+        {
+            return (pageIndex + 1, documentPageCount);
+        }
+
+        foreach (var range in ranges)
+        {
+            if (pageIndex >= range.Start && pageIndex < range.Start + range.Count)
+            {
+                return (pageIndex - range.Start + 1, range.Count);
+            }
+        }
+
+        return (pageIndex + 1, documentPageCount);
+    }
+
+    private static XBrush SolidBrush(string hex, RgbColor fallback)
+    {
+        var color = HexColor.ParseOrDefault(hex, fallback);
+        return new XSolidBrush(XColor.FromArgb(color.R, color.G, color.B));
+    }
+
+    private static string DescribeExtras(MergeRequest request)
+    {
+        var extras = new List<string>();
+
+        if (request.PageNumbers is not null)
+        {
+            extras.Add("ترقيم");
+        }
+
+        if (request.Watermark is not null)
+        {
+            extras.Add(request.Watermark.IsImage ? "علامة مائية (صورة)" : "علامة مائية");
+        }
+
+        if (request.CustomText is not null)
+        {
+            extras.Add("نص مخصص");
+        }
+
+        return extras.Count == 0 ? "" : $" مع {string.Join(" و", extras)}";
     }
 }

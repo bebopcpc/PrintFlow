@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\PrintFlow.Application\PrintFlow.Application.csproj" />
     <ProjectReference Include="..\PrintFlow.Infrastructure\PrintFlow.Infrastructure.csproj" />
+    <ProjectReference Include="..\PrintFlow.Presentation\PrintFlow.Presentation.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -11,6 +12,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <Version>1.2.3</Version>
+    <!-- غيّر ده لاسمك أو اسم المطبعة. SwiftByte شركة تانية — ماينفعش اسمها
+         يبقى مكتوب في خصائص ملف البرنامج وهو كودك إنت من الأول لآخره. -->
+    <Company>PrintFlow</Company>
+    <Product>PrintFlow</Product>
+    <AssemblyTitle>PrintFlow</AssemblyTitle>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,12 +1,27 @@
-﻿<Window x:Class="PrintFlow.UI.MainWindow"
+<Window x:Class="PrintFlow.UI.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="PrintFlow" Height="600" Width="900"
-        FontFamily="Segoe UI" Background="#F5F6FA">
+        xmlns:local="clr-namespace:PrintFlow.UI"
+        Title="{Binding WindowTitle}" Height="700" Width="1080"
+        FontFamily="Segoe UI" Background="#F5F6FA"
+        FlowDirection="RightToLeft">
 
+    <!--
+        كل حاجة هنا مربوطة بالـ ViewModel بالـ Binding.
+        مفيش x:Name لأي كنترول بيتقرا من الـ code-behind — الإعدادات عايشة في
+        PrintSettings و AppSettings، والواجهة بتعكسها بس.
+    -->
     <Window.Resources>
         <SolidColorBrush x:Key="AccentBrush" Color="#2F6FED"/>
         <SolidColorBrush x:Key="BorderBrush2" Color="#DCE0E8"/>
+        <SolidColorBrush x:Key="MutedBrush" Color="#8A93A6"/>
+
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <local:HexToBrushConverter x:Key="HexToBrush"/>
+        <local:InverseBooleanConverter x:Key="InverseBool"/>
+        <local:PercentToOpacityConverter x:Key="PercentToOpacity"/>
+        <local:NegateConverter x:Key="Negate"/>
+        <local:ContentPositionToAlignmentConverter x:Key="PositionToAlign"/>
 
         <Style TargetType="GroupBox">
             <Setter Property="Margin" Value="0,0,0,10"/>
@@ -19,6 +34,12 @@
             <Setter Property="Margin" Value="0,4,0,0"/>
         </Style>
 
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="#666"/>
+            <Setter Property="Margin" Value="0,8,0,2"/>
+        </Style>
+
         <Style x:Key="ActionButton" TargetType="Button">
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="BorderThickness" Value="0"/>
@@ -28,9 +49,53 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                CornerRadius="6" Padding="{TemplateBinding Padding}">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.88"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TabTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+        </Style>
+
+        <!-- زرار شيل الملف: دايرة حمرا فاتحة واضحة، بتغمق لما الماوس يعدي عليها.
+             النسخة القديمة كانت Transparent فمحدش كان واخد باله إنها موجودة. -->
+        <Style x:Key="RowDeleteButton" TargetType="Button">
+            <Setter Property="Width" Value="24"/>
+            <Setter Property="Height" Value="24"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="#C0392B"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="#FDECEA" CornerRadius="12"
+                                BorderBrush="#F1B0AA" BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#E0483E"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#E0483E"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -39,131 +104,576 @@
 
     <Grid Margin="14">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" Text="PrintFlow | الرئيسية" FontSize="18" FontWeight="Bold"
-                   Foreground="{StaticResource AccentBrush}" Margin="0,0,0,10"/>
+        <TabControl Grid.Row="0" Background="Transparent" BorderThickness="0" Padding="0,10,0,0">
 
-        <Grid Grid.Row="1">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="230"/>
-                <ColumnDefinition Width="230"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
+            <!-- ══════════════════ تاب الرئيسية ══════════════════ -->
+            <TabItem Header="الرئيسية">
+                <Grid Margin="0,10,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
 
-            <!-- العمود الأول: خيارات دمج ومعالجة الملفات -->
-            <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                <GroupBox Header="خيارات دمج ومعالجة الملفات">
-                    <StackPanel>
-                        <CheckBox x:Name="PageNumbersCheckBox" Content="ترقيم صفحات كل ملف"/>
-                        <CheckBox Content="دمج وحفظ الملفات" IsChecked="True" IsEnabled="False"
-                                  ToolTip="مفعّلة دايمًا حاليًا - دمج الملفات هو أساس عمل البرنامج"/>
-                        <CheckBox Content="حفظ الملفات المحوّلة لـ PDF" IsEnabled="False" Foreground="#999"/>
-                        <CheckBox Content="حفظ الملفات بعد المعالجة" IsEnabled="False" Foreground="#999"/>
-                        <CheckBox Content="ضغط الملفات (عادي)" IsEnabled="False" Foreground="#999"/>
-                        <CheckBox Content="ضغط الملفات (متقدم)" IsEnabled="False" Foreground="#999"/>
-                        <CheckBox Content="حذف صفحات من كل ملف" IsEnabled="False" Foreground="#999"/>
-                        <TextBlock Text="قريبًا" FontSize="10" Foreground="#AAA" Margin="0,4,0,0"/>
-                    </StackPanel>
-                </GroupBox>
+                    <Grid Grid.Row="0" IsEnabled="{Binding IsIdle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="250"/>
+                            <ColumnDefinition Width="250"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
 
-                <GroupBox Header="العلامة المائية">
-                    <StackPanel>
-                        <TextBlock Text="النص (اختياري)" FontSize="11" Foreground="#666"/>
-                        <TextBox x:Name="WatermarkTextBox" Margin="0,4,0,0"/>
-                        <TextBlock Text="ستنتقل لتاب الإعدادات العامة لاحقًا" FontSize="10" Foreground="#AAA" Margin="0,4,0,0"/>
-                    </StackPanel>
-                </GroupBox>
-            </StackPanel>
+                        <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="0,0,8,0">
+                            <StackPanel>
+                                <GroupBox Header="خيارات دمج ومعالجة الملفات">
+                                    <StackPanel>
+                                        <CheckBox Content="ترقيم صفحات كل ملف"
+                                                  IsChecked="{Binding Settings.NumberPagesPerFile}"/>
+                                        <CheckBox Content="دمج وحفظ الملفات"
+                                                  IsChecked="{Binding Settings.MergeFiles}"/>
+                                        <CheckBox Content="حفظ الملفات المحوّلة لـ PDF"
+                                                  IsChecked="{Binding Settings.SaveConvertedToPdf}"
+                                                  IsEnabled="False" Foreground="{StaticResource MutedBrush}"/>
+                                        <CheckBox Content="حفظ الملفات بعد المعالجة"
+                                                  IsChecked="{Binding Settings.SaveAfterProcessing}"
+                                                  IsEnabled="False" Foreground="{StaticResource MutedBrush}"/>
 
-            <!-- العمود الثاني: خيارات البوكليت + خيارات الطباعة -->
-            <StackPanel Grid.Column="1" Margin="0,0,8,0">
-                <GroupBox Header="خيارات البوكليت (Booklet)">
-                    <StackPanel>
-                        <CheckBox Content="طباعة الملفات بنظام بوكليت" IsEnabled="False" Foreground="#999"/>
-                        <TextBlock Text="قريبًا" FontSize="10" Foreground="#AAA" Margin="0,4,0,0"/>
-                    </StackPanel>
-                </GroupBox>
+                                        <TextBlock Text="ضغط الملفات" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox ItemsSource="{Binding CompressionModes}"
+                                                  DisplayMemberPath="Label" SelectedValuePath="Value"
+                                                  SelectedValue="{Binding Settings.Compression}"
+                                                  IsEnabled="False"/>
 
-                <GroupBox Header="خيارات الطباعة">
-                    <StackPanel>
-                        <TextBlock Text="مقاس الورق" FontSize="11" Foreground="#666"/>
-                        <ComboBox x:Name="PaperSizeComboBox" SelectedIndex="0" Margin="0,4,0,8">
-                            <ComboBoxItem Content="A4"/>
-                            <ComboBoxItem Content="A3"/>
-                            <ComboBoxItem Content="Letter"/>
-                            <ComboBoxItem Content="Legal"/>
-                        </ComboBox>
+                                        <CheckBox Content="حذف صفحات من كل ملف"
+                                                  IsChecked="{Binding Settings.DeletePages}"
+                                                  IsEnabled="False" Foreground="{StaticResource MutedBrush}"/>
+                                        <TextBox Text="{Binding Settings.PagesToDelete}" Margin="0,4,0,0"
+                                                 IsEnabled="{Binding Settings.DeletePages}"
+                                                 ToolTip="مثال: 1,3,5-8"/>
 
-                        <CheckBox x:Name="GrayscaleCheckBox" Content="طباعة أبيض وأسود (Grayscale)"/>
-                        <CheckBox x:Name="DuplexCheckBox" Content="الطباعة على الوجهين (Duplex)"/>
+                                        <TextBlock Text="العناصر الرمادية لسه مش مبنية" FontSize="10"
+                                                   Foreground="#AAA" Margin="0,6,0,0"/>
+                                    </StackPanel>
+                                </GroupBox>
 
-                        <TextBlock Text="إجمالي عدد النسخ" FontSize="11" Foreground="#666" Margin="0,8,0,0"/>
-                        <TextBox x:Name="CopiesPerPrinterTextBox" Text="1" Margin="0,4,0,8"/>
+                                <GroupBox Header="خيارات الشرائح">
+                                    <StackPanel IsEnabled="False">
+                                        <TextBlock Text="عدد الشرائح" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox ItemsSource="{Binding SlidesPerSheetOptions}"
+                                                  SelectedItem="{Binding Settings.SlidesPerSheet}"/>
 
-                        <CheckBox x:Name="MultiPrinterCheckBox" Content="طباعة الملفات على أكثر من طابعة"
-                                  Checked="MultiPrinterCheckBox_Changed" Unchecked="MultiPrinterCheckBox_Changed"/>
-                        <CheckBox x:Name="DistributeCheckBox" Content="توزيع نسخ الملف الواحد على الطابعات"/>
-                    </StackPanel>
-                </GroupBox>
-            </StackPanel>
+                                        <TextBlock Text="اتجاه الصفحة" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox ItemsSource="{Binding PageOrientations}"
+                                                  DisplayMemberPath="Label" SelectedValuePath="Value"
+                                                  SelectedValue="{Binding Settings.SlideOrientation}"/>
 
-            <!-- العمود الثالث: منطقة الملفات والبرنترات وأزرار التنفيذ -->
-            <Grid Grid.Column="2">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
+                                        <TextBlock Text="اتجاه البدء" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox ItemsSource="{Binding SlideStarts}"
+                                                  DisplayMemberPath="Label" SelectedValuePath="Value"
+                                                  SelectedValue="{Binding Settings.SlideStart}"/>
 
-                <StackPanel Grid.Row="0">
-                    <Border x:Name="FileDropArea"
-                            BorderBrush="{StaticResource AccentBrush}"
-                            BorderThickness="2"
-                            CornerRadius="8"
-                            Background="#EEF3FF"
-                            Height="110"
-                            AllowDrop="True"
-                            Drop="FileDropArea_Drop"
-                            DragOver="FileDropArea_DragOver"
-                            MouseLeftButtonUp="FileDropArea_Click">
-                        <TextBlock Text="اسحب ملفات PDF هنا وأفلتها، أو اضغط لتحميل الملفات"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   TextAlignment="Center" TextWrapping="Wrap"
-                                   Foreground="{StaticResource AccentBrush}" FontWeight="SemiBold" Margin="10"/>
-                    </Border>
+                                        <TextBlock Text="ترتيب الشرائح" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox ItemsSource="{Binding SlideOrders}"
+                                                  DisplayMemberPath="Label" SelectedValuePath="Value"
+                                                  SelectedValue="{Binding Settings.SlideOrder}"/>
 
-                    <ListBox x:Name="LoadedFilesListBox" Height="90" Margin="0,8,0,0"/>
+                                        <TextBlock Text="الهوامش" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Text="{Binding Settings.SlideMargin}"/>
 
-                    <!-- قائمة البرنترات (تظهر بس لو "طباعة على أكثر من طابعة" متفعّلة) -->
-                    <StackPanel x:Name="MultiPrinterPanel" Visibility="Collapsed" Margin="0,10,0,0">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="اختر البرنترات:" FontSize="12" Foreground="#666" VerticalAlignment="Center"/>
-                            <Button Grid.Column="1" Content="اكتشاف البرنترات" Padding="8,4" FontSize="11"
-                                    Background="{StaticResource AccentBrush}" Style="{StaticResource ActionButton}"
-                                    Click="RefreshButton_Click"/>
+                                        <CheckBox Content="إضافة إطار حول الشريحة"
+                                                  IsChecked="{Binding Settings.DrawSlideBorder}"/>
+                                    </StackPanel>
+                                </GroupBox>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="0,0,8,0">
+                            <StackPanel>
+                                <GroupBox Header="خيارات البوكليت (Booklet)">
+                                    <StackPanel IsEnabled="False">
+                                        <CheckBox Content="طباعة الملفات بنظام بوكليت"
+                                                  IsChecked="{Binding Settings.BookletMode}"/>
+                                        <TextBlock Text="اتجاه البدء" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox ItemsSource="{Binding BookletStarts}"
+                                                  DisplayMemberPath="Label" SelectedValuePath="Value"
+                                                  SelectedValue="{Binding Settings.BookletStart}"/>
+                                    </StackPanel>
+                                </GroupBox>
+
+                                <GroupBox Header="خيارات الطباعة">
+                                    <StackPanel>
+                                        <CheckBox Content="الطباعة مباشرة بعد المعالجة"
+                                                  IsChecked="{Binding Settings.PrintDirectlyAfterProcessing}"/>
+                                        <CheckBox Content="طباعة أبيض وأسود (Grayscale)"
+                                                  IsChecked="{Binding Settings.Grayscale}"/>
+                                        <CheckBox Content="الطباعة على الوجهين (Duplex)"
+                                                  IsChecked="{Binding Settings.Duplex}"/>
+
+                                        <TextBlock Text="اتجاه قلب الصفحة" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox ItemsSource="{Binding DuplexFlips}"
+                                                  DisplayMemberPath="Label" SelectedValuePath="Value"
+                                                  SelectedValue="{Binding Settings.DuplexFlip}"
+                                                  IsEnabled="{Binding Settings.Duplex}"/>
+
+                                        <TextBlock Text="الطابعة (اللي هيتطبع عليها فعلاً)" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox ItemsSource="{Binding Printers}"
+                                                  DisplayMemberPath="DisplayText" SelectedValuePath="Name"
+                                                  SelectedValue="{Binding Settings.PrinterName}"
+                                                  IsEnabled="{Binding SinglePrinterMode}"
+                                                  ToolTip="دي طابعة الجوب الحالي — الطباعة بتروح لهنا.&#10;بتبدأ على &quot;الطابعة الافتراضية للبرنامج&quot; من تاب الإعدادات العامة، وتقدر تغيّرها للجوب ده بس.&#10;في وضع أكتر من طابعة، الاختيار بيبقى من القايمة اللي تحت."/>
+
+                                        <TextBlock Text="اتجاه الصفحة" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox ItemsSource="{Binding PageOrientations}"
+                                                  DisplayMemberPath="Label" SelectedValuePath="Value"
+                                                  SelectedValue="{Binding Settings.PageOrientation}"/>
+
+                                        <TextBlock Text="حجم الورق" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox ItemsSource="{Binding PaperSizes}"
+                                                  SelectedItem="{Binding Settings.PaperSize}"/>
+
+                                        <TextBlock Text="مقياس الصفحة (%)" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Text="{Binding Settings.ScalePercent}" IsEnabled="False"
+                                                 ToolTip="SumatraPDF مبيدعمش تحجيم بنسبة مئوية — لازم يتعمل على الـ PDF نفسه"/>
+
+                                        <TextBlock Text="إجمالي عدد النسخ" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Text="{Binding Settings.TotalCopies}"/>
+
+                                        <CheckBox Content="طباعة الملفات على أكثر من طابعة"
+                                                  IsChecked="{Binding Settings.UseMultiplePrinters}"/>
+                                        <CheckBox Content="توزيع نسخ الملف الواحد على الطابعات"
+                                                  IsChecked="{Binding Settings.DistributeCopies}"
+                                                  IsEnabled="{Binding Settings.UseMultiplePrinters}"/>
+                                    </StackPanel>
+                                </GroupBox>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <Grid Grid.Column="2">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="140"/>
+                            </Grid.RowDefinitions>
+
+                            <Border Grid.Row="0"
+                                    BorderBrush="{StaticResource AccentBrush}" BorderThickness="2"
+                                    CornerRadius="8" Background="#EEF3FF" Height="90"
+                                    AllowDrop="True"
+                                    Drop="FileDropArea_Drop"
+                                    DragOver="FileDropArea_DragOver"
+                                    MouseLeftButtonUp="FileDropArea_Click">
+                                <TextBlock Text="اسحب ملفات PDF هنا وأفلتها، أو اضغط لتحميل الملفات"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           TextAlignment="Center" TextWrapping="Wrap"
+                                           Foreground="{StaticResource AccentBrush}" FontWeight="SemiBold" Margin="10"/>
+                            </Border>
+
+                            <GroupBox Grid.Row="1" Header="{Binding FilesCountText}" Margin="0,8,0,0">
+                                <ListBox ItemsSource="{Binding Files}" BorderThickness="0"
+                                         HorizontalContentAlignment="Stretch">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="{Binding DisplayText}"
+                                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                           Margin="0,0,8,0"/>
+                                                <Button Grid.Column="1" Content="✕"
+                                                        Style="{StaticResource RowDeleteButton}"
+                                                        ToolTip="شيل الملف ده من القايمة"
+                                                        Command="{Binding DataContext.RemoveFileCommand,
+                                                                  RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                        CommandParameter="{Binding}"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </GroupBox>
+
+                            <GroupBox Grid.Row="2" Header="اختر الطابعات" Margin="0,0,0,8"
+                                      Visibility="{Binding Settings.UseMultiplePrinters, Converter={StaticResource BoolToVis}}">
+                                <StackPanel>
+                                    <Button Content="تحديث الطابعات" Padding="8,4" FontSize="11"
+                                            HorizontalAlignment="Left" Margin="0,0,0,6"
+                                            Background="{StaticResource AccentBrush}"
+                                            Style="{StaticResource ActionButton}"
+                                            Command="{Binding RefreshPrintersCommand}"/>
+                                    <ListBox ItemsSource="{Binding Printers}" Height="110" BorderThickness="0">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <CheckBox IsChecked="{Binding IsSelected}"
+                                                          Content="{Binding DisplayText}"
+                                                          IsEnabled="{Binding IsEligible}"/>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Grid.Row="3" Header="النتائج">
+                                <ListBox ItemsSource="{Binding Log}" BorderThickness="0" FontSize="11"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
+                            </GroupBox>
                         </Grid>
-                        <ListBox x:Name="PrintersListBox" Height="100" Margin="0,6,0,0" SelectionMode="Multiple"/>
-                    </StackPanel>
-                </StackPanel>
+                    </Grid>
 
-                <!-- شريط الأزرار السفلي -->
-                <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0">
-                    <Button Content="تحميل الملفات" Background="#2FA84F" Style="{StaticResource ActionButton}"
-                            Margin="0,0,8,0" Click="FileDropArea_Click"/>
-                    <Button x:Name="MergeButton" Content="بدء معالجة الملفات" Background="{StaticResource AccentBrush}"
-                            Style="{StaticResource ActionButton}" Margin="0,0,8,0" Click="MergeButton_Click"/>
-                    <Button x:Name="PrintToAllButton" Content="طباعة الآن" Background="#2F6FED"
-                            Style="{StaticResource ActionButton}" Margin="0,0,8,0" Click="PrintToAllButton_Click"/>
-                    <Button Content="حذف الملفات وإرجاع الإعدادات" Background="#E0483E"
-                            Style="{StaticResource ActionButton}" Click="ResetButton_Click"/>
-                </StackPanel>
-            </Grid>
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,10,0,0">
+                        <Button Content="تحميل الملفات" Background="#2FA84F"
+                                Style="{StaticResource ActionButton}" Margin="0,0,8,0"
+                                Click="LoadFilesButton_Click"/>
+                        <Button Content="بدء معالجة الملفات" Background="{StaticResource AccentBrush}"
+                                Style="{StaticResource ActionButton}" Margin="0,0,8,0"
+                                Command="{Binding ProcessCommand}"/>
+                        <Button Content="طباعة الآن" Background="#1F4FB0"
+                                Style="{StaticResource ActionButton}" Margin="0,0,8,0"
+                                Command="{Binding PrintCommand}"/>
+                        <Button Content="حذف الملفات وإرجاع الإعدادات" Background="#E0483E"
+                                Style="{StaticResource ActionButton}"
+                                Command="{Binding ResetCommand}"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <!-- ══════════════════ تاب الإعدادات المسبقة ══════════════════ -->
+            <TabItem Header="الإعدادات المسبقة">
+                <Grid Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="360"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <GroupBox Grid.Column="0" Header="الإعدادات المسبقة المحفوظة" Margin="0,0,10,0">
+                        <ListBox ItemsSource="{Binding Presets}"
+                                 SelectedItem="{Binding SelectedPreset}"
+                                 BorderThickness="0" HorizontalContentAlignment="Stretch">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,4">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                        <TextBlock Text="{Binding Settings.PaperSize}" FontSize="11"
+                                                   Foreground="{StaticResource MutedBrush}"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </GroupBox>
+
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="حفظ الإعدادات الحالية" Style="{StaticResource TabTitle}"/>
+
+                        <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,10"
+                                   Text="اضبط الخيارات اللي إنت عايزها في تاب الرئيسية، وبعدين اكتب اسم هنا واضغط إضافة. الإعداد بيتحفظ في ملف على الجهاز وبيفضل موجود بعد ما تقفل البرنامج."/>
+
+                        <TextBlock Text="اسم الإعداد المسبق" Style="{StaticResource FieldLabel}"/>
+                        <TextBox Text="{Binding NewPresetName, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="300" HorizontalAlignment="Right"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                            <Button Content="إضافة" Background="#2FA84F" Margin="0,0,8,0"
+                                    Style="{StaticResource ActionButton}"
+                                    Command="{Binding AddPresetCommand}"/>
+                            <Button Content="تعديل" Background="#E67E22" Margin="0,0,8,0"
+                                    Style="{StaticResource ActionButton}"
+                                    ToolTip="بيكتب الإعدادات الحالية فوق الإعداد المختار"
+                                    Command="{Binding UpdatePresetCommand}"/>
+                            <Button Content="حذف" Background="#E0483E" Margin="0,0,8,0"
+                                    Style="{StaticResource ActionButton}"
+                                    Command="{Binding DeletePresetCommand}"/>
+                            <Button Content="تطبيق" Background="{StaticResource AccentBrush}"
+                                    Style="{StaticResource ActionButton}"
+                                    ToolTip="بينقل قيم الإعداد المختار لتاب الرئيسية"
+                                    Command="{Binding ApplyPresetCommand}"/>
+                        </StackPanel>
+
+                        <GroupBox Header="تفاصيل الإعداد المختار" Margin="0,20,0,0">
+                            <TextBlock Text="{Binding SelectedPresetSummary}" TextWrapping="Wrap"
+                                       Padding="4" Foreground="#444"/>
+                        </GroupBox>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <!-- ══════════════════ تاب الإعدادات العامة ══════════════════ -->
+            <TabItem Header="الإعدادات العامة">
+                <Grid Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="290"/>
+                        <ColumnDefinition Width="320"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- عام + ترقيم -->
+                    <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="0,0,10,0">
+                        <StackPanel>
+                            <GroupBox Header="إعدادات عامة">
+                                <StackPanel>
+                                    <TextBlock Text="الطابعة الافتراضية للبرنامج (نقطة البداية)" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox ItemsSource="{Binding Printers}"
+                                              DisplayMemberPath="Name" SelectedValuePath="Name"
+                                              SelectedValue="{Binding App.DefaultPrinterName}"
+                                              ToolTip="دي اللي البرنامج بيبدأ بيها لما يفتح.&#10;الطباعة الفعلية بتروح لطابعة تاب الرئيسية — لو غيّرتها هناك، اختيارك هناك هو اللي بيحصل."/>
+
+                                    <TextBlock Text="ترتيب الملفات" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox ItemsSource="{Binding FileSortOrders}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              SelectedValue="{Binding App.FileSortOrder}"/>
+
+                                    <TextBlock Text="طريقة الحساب" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox ItemsSource="{Binding CountingMethods}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              SelectedValue="{Binding App.CountingMethod}"/>
+
+                                    <TextBlock Text="المظهر (قريبًا)" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox ItemsSource="{Binding Themes}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              SelectedValue="{Binding App.Theme}" IsEnabled="False"
+                                              ToolTip="الاختيار بيتحفظ، بس تطبيق الثيم المعتم لسه مش مبني"/>
+
+                                    <TextBlock Text="اللغة (قريبًا)" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox ItemsSource="{Binding Languages}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              SelectedValue="{Binding App.Language}" IsEnabled="False"
+                                              ToolTip="الاختيار بيتحفظ، بس الترجمة للإنجليزي لسه مش مبنية"/>
+
+                                    <TextBlock Text="مجلد افتراضي لحفظ الملفات" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox Text="{Binding App.DefaultOutputFolder}" IsReadOnly="True"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                        <Button Content="اختيار مجلد" Background="#1B2A4A" FontSize="11" Padding="8,4"
+                                                Margin="0,0,6,0" Style="{StaticResource ActionButton}"
+                                                Click="PickOutputFolder_Click"/>
+                                        <Button Content="إزالة" Background="#E0483E" FontSize="11" Padding="8,4"
+                                                Style="{StaticResource ActionButton}"
+                                                Click="ClearOutputFolder_Click"/>
+                                    </StackPanel>
+
+                                    <TextBlock Text="تحديث حالة الطابعات (ثانية)" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox Text="{Binding App.PrinterRefreshSeconds}"/>
+
+                                    <TextBlock Text="مسح الملفات المؤقتة الأقدم من (يوم)" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox Text="{Binding App.TempFileRetentionDays}"/>
+
+                                    <Button Content="فتح مجلد سجل التشغيل" Background="#1B2A4A" FontSize="11"
+                                            Padding="8,4" Margin="0,12,0,0" HorizontalAlignment="Right"
+                                            Style="{StaticResource ActionButton}"
+                                            ToolTip="فيه ملف لكل يوم بكل عمليات المعالجة والطباعة — ابعته لو حصلت مشكلة"
+                                            Click="OpenLogFolder_Click"/>
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Header="إعدادات الترقيم">
+                                <StackPanel>
+                                    <CheckBox Content="ترقيم الورقة كاملة بدل الشريحة"
+                                              IsChecked="{Binding App.NumberWholeSheetInsteadOfSlide}"
+                                              ToolTip="بيفرق بس لما نبني نظام الشرائح"/>
+
+                                    <CheckBox Content="كل ملف يبدأ ترقيمه من 1"
+                                              Margin="0,6,0,0"
+                                              IsChecked="{Binding App.RestartNumberingForEachFile}"
+                                              ToolTip="مقفولة = ترقيم متصل على المستند كله (1 من 40، 2 من 40…)&#10;مفتوحة = كل ملف لوحده (1 من 5 في الملف الأول، 1 من 12 في التاني…)"/>
+
+                                    <CheckBox Content="خلفية خفيفة ورا الرقم"
+                                              Margin="0,6,0,0"
+                                              IsChecked="{Binding App.PageNumberBackdrop}"
+                                              ToolTip="على ورقة بيضا مش بتبان خالص.&#10;على مستند بخلفية ملونة كاملة دي اللي بتخلي الرقم يتقرا بدل ما يختفي."/>
+
+                                    <TextBlock Text="مكان الترقيم" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox ItemsSource="{Binding ContentPositions}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              SelectedValue="{Binding App.PageNumberPosition}"/>
+
+                                    <TextBlock Text="لون الترقيم" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox ItemsSource="{Binding ColorPalette}"
+                                              SelectedValuePath="Hex"
+                                              SelectedValue="{Binding App.PageNumberColorHex}">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Border Width="14" Height="14" CornerRadius="2" Margin="0,0,6,0"
+                                                            BorderBrush="#CCC" BorderThickness="1"
+                                                            Background="{Binding Hex, Converter={StaticResource HexToBrush}}"/>
+                                                    <TextBlock Text="{Binding Label}"/>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+
+                                    <TextBlock Text="حجم خط الترقيم" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox Text="{Binding App.PageNumberFontSize}"/>
+
+                                    <TextBlock Text="المسافة من الحافة" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox Text="{Binding App.PageNumberEdgeMargin}"/>
+                                </StackPanel>
+                            </GroupBox>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- نص مخصص + علامة مائية -->
+                    <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="0,0,10,0">
+                        <StackPanel>
+                            <GroupBox Header="النص المخصص">
+                                <StackPanel>
+                                    <CheckBox Content="إضافة نص مخصص لكل الملفات"
+                                              IsChecked="{Binding App.CustomTextEnabled}"/>
+                                    <TextBox Text="{Binding App.CustomText, UpdateSourceTrigger=PropertyChanged}"
+                                             Margin="0,6,0,0" IsEnabled="{Binding App.CustomTextEnabled}"/>
+
+                                    <TextBlock Text="مكان النص" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox ItemsSource="{Binding ContentPositions}"
+                                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              SelectedValue="{Binding App.CustomTextPosition}"
+                                              IsEnabled="{Binding App.CustomTextEnabled}"/>
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Header="العلامة المائية (Watermark)">
+                                <StackPanel>
+                                    <CheckBox Content="إضافة علامة مائية لكل الملفات"
+                                              IsChecked="{Binding App.WatermarkEnabled}"/>
+                                    <CheckBox Content="العلامة على الورقة كاملة بدل الشريحة"
+                                              IsChecked="{Binding App.WatermarkOnWholeSheet}"
+                                              ToolTip="بيفرق بس لما نبني نظام الشرائح"/>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0"
+                                                IsEnabled="{Binding App.WatermarkEnabled}">
+                                        <RadioButton Content="نص" GroupName="WatermarkKind" Margin="0,0,16,0"
+                                                     IsChecked="{Binding App.WatermarkIsImage,
+                                                                 Converter={StaticResource InverseBool}}"/>
+                                        <RadioButton Content="صورة" GroupName="WatermarkKind"
+                                                     IsChecked="{Binding App.WatermarkIsImage}"/>
+                                    </StackPanel>
+
+                                    <TextBlock Text="النص" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox Text="{Binding App.WatermarkText, UpdateSourceTrigger=PropertyChanged}"
+                                             IsEnabled="{Binding App.WatermarkIsImage,
+                                                         Converter={StaticResource InverseBool}}"/>
+
+                                    <TextBlock Text="صورة العلامة" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox Text="{Binding App.WatermarkImagePath}" IsReadOnly="True"/>
+                                    <Button Content="اختيار صورة" Background="#1B2A4A" FontSize="11" Padding="8,4"
+                                            HorizontalAlignment="Right" Margin="0,6,0,0"
+                                            IsEnabled="{Binding App.WatermarkIsImage}"
+                                            Style="{StaticResource ActionButton}"
+                                            Click="PickWatermarkImage_Click"/>
+
+                                    <TextBlock Text="اللون" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox ItemsSource="{Binding ColorPalette}"
+                                              SelectedValuePath="Hex"
+                                              SelectedValue="{Binding App.WatermarkColorHex}">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Border Width="14" Height="14" CornerRadius="2" Margin="0,0,6,0"
+                                                            BorderBrush="#CCC" BorderThickness="1"
+                                                            Background="{Binding Hex, Converter={StaticResource HexToBrush}}"/>
+                                                    <TextBlock Text="{Binding Label}"/>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+
+                                    <TextBlock Text="الخط" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox ItemsSource="{Binding WatermarkFonts}"
+                                              SelectedItem="{Binding App.WatermarkFontFamily}"/>
+
+                                    <CheckBox Content="خط عريض (Bold)" IsChecked="{Binding App.WatermarkBold}"/>
+
+                                    <TextBlock Text="{Binding App.WatermarkFontSize, StringFormat='حجم الخط: {0}'}"
+                                               Style="{StaticResource FieldLabel}"/>
+                                    <Slider Minimum="6" Maximum="200" TickFrequency="1" IsSnapToTickEnabled="True"
+                                            Value="{Binding App.WatermarkFontSize}"/>
+
+                                    <TextBlock Text="{Binding App.WatermarkOpacityPercent, StringFormat='الشفافية: {0}%'}"
+                                               Style="{StaticResource FieldLabel}"/>
+                                    <Slider Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True"
+                                            Value="{Binding App.WatermarkOpacityPercent}"/>
+
+                                    <TextBlock Text="{Binding App.WatermarkRotationDegrees, StringFormat='زاوية الدوران: {0}°'}"
+                                               Style="{StaticResource FieldLabel}"/>
+                                    <Slider Minimum="-180" Maximum="180" TickFrequency="1" IsSnapToTickEnabled="True"
+                                            Value="{Binding App.WatermarkRotationDegrees}"/>
+                                </StackPanel>
+                            </GroupBox>
+
+                            <Button Content="استعادة الإعدادات الافتراضية" Background="#E67E22"
+                                    Style="{StaticResource ActionButton}"
+                                    Command="{Binding RestoreDefaultAppSettingsCommand}"/>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- معاينة -->
+                    <GroupBox Grid.Column="2" Header="معاينة">
+                        <Border Background="White" BorderBrush="{StaticResource BorderBrush2}" BorderThickness="1"
+                                MaxWidth="300" MaxHeight="420" Margin="6"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
+                                FlowDirection="LeftToRight">
+                            <Grid ClipToBounds="True">
+                                <!-- خطوط تمثّل محتوى الصفحة -->
+                                <StackPanel Margin="24" VerticalAlignment="Top" Opacity="0.25">
+                                    <Rectangle Height="4" Fill="#999" Margin="0,0,0,9"/>
+                                    <Rectangle Height="4" Fill="#999" Margin="0,0,0,9"/>
+                                    <Rectangle Height="4" Fill="#999" Margin="0,0,0,9" Width="180" HorizontalAlignment="Left"/>
+                                    <Rectangle Height="4" Fill="#999" Margin="0,0,0,9"/>
+                                    <Rectangle Height="4" Fill="#999" Margin="0,0,0,9" Width="120" HorizontalAlignment="Left"/>
+                                </StackPanel>
+
+                                <!-- العلامة المائية -->
+                                <TextBlock Text="{Binding App.WatermarkText}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           FontFamily="{Binding App.WatermarkFontFamily}"
+                                           FontSize="{Binding App.WatermarkFontSize}"
+                                           Foreground="{Binding App.WatermarkColorHex, Converter={StaticResource HexToBrush}}"
+                                           Opacity="{Binding App.WatermarkOpacityPercent, Converter={StaticResource PercentToOpacity}}"
+                                           Visibility="{Binding App.WatermarkEnabled, Converter={StaticResource BoolToVis}}"
+                                           RenderTransformOrigin="0.5,0.5">
+                                    <TextBlock.RenderTransform>
+                                        <RotateTransform Angle="{Binding App.WatermarkRotationDegrees,
+                                                                 Converter={StaticResource Negate}}"/>
+                                    </TextBlock.RenderTransform>
+                                </TextBlock>
+
+                                <!-- رقم الصفحة -->
+                                <TextBlock Text="صفحة 1 من 12" Margin="12"
+                                           FontSize="{Binding App.PageNumberFontSize}"
+                                           Foreground="{Binding App.PageNumberColorHex, Converter={StaticResource HexToBrush}}"
+                                           HorizontalAlignment="{Binding App.PageNumberPosition,
+                                                                 Converter={StaticResource PositionToAlign}, ConverterParameter=H}"
+                                           VerticalAlignment="{Binding App.PageNumberPosition,
+                                                               Converter={StaticResource PositionToAlign}, ConverterParameter=V}"/>
+
+                                <!-- النص المخصص -->
+                                <TextBlock Text="{Binding App.CustomText}" Margin="12"
+                                           FontSize="{Binding App.PageNumberFontSize}"
+                                           Foreground="{Binding App.PageNumberColorHex, Converter={StaticResource HexToBrush}}"
+                                           Visibility="{Binding App.CustomTextEnabled, Converter={StaticResource BoolToVis}}"
+                                           HorizontalAlignment="{Binding App.CustomTextPosition,
+                                                                 Converter={StaticResource PositionToAlign}, ConverterParameter=H}"
+                                           VerticalAlignment="{Binding App.CustomTextPosition,
+                                                               Converter={StaticResource PositionToAlign}, ConverterParameter=V}"/>
+                            </Grid>
+                        </Border>
+                    </GroupBox>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <!-- ══════════ شريط الحالة ══════════ -->
+        <Grid Grid.Row="1" Margin="0,10,0,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <ProgressBar Grid.Row="0" Height="3" IsIndeterminate="True" Margin="0,0,0,6"
+                         Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"/>
+
+            <TextBlock Grid.Row="1" Text="{Binding StatusText}" VerticalAlignment="Center"
+                       Foreground="#555" TextTrimming="CharacterEllipsis"/>
         </Grid>
     </Grid>
 </Window>

@@ -1,0 +1,23 @@
+﻿PrintFlow — إشعارات الطرف الثالث
+=====================================
+
+البرنامج ده بيستخدم المكوّنات دي:
+
+1) PDFsharp
+   الترخيص: MIT
+   https://github.com/empira/PDFsharp
+
+2) SumatraPDF  (ملف تنفيذي منفصل في مجلد tools)
+   الترخيص: GNU GPL v3
+   https://www.sumatrapdfreader.org/
+   https://github.com/sumatrapdfreader/sumatrapdf
+
+   PrintFlow بينادي SumatraPDF كبرنامج منفصل عن طريق سطر الأوامر،
+   ومش بيربطه بالكود بتاعه. توزيع الملف التنفيذي ده عليه التزامات
+   رخصة GPLv3 (منها إتاحة السورس كود وإرفاق نص الرخصة).
+
+   قبل أي بيع تجاري، لازم مراجعة الالتزامات دي مع مختص قانوني.
+
+3) .NET Runtime
+   الترخيص: MIT
+   https://github.com/dotnet/runtime

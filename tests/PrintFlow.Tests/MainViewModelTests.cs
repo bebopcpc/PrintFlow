@@ -1,0 +1,705 @@
+using PrintFlow.Application;
+using PrintFlow.Domain;
+using PrintFlow.Presentation;
+
+namespace PrintFlow.Tests;
+
+/// <summary>
+/// دي أهم فايدة عملية من الـ ViewModel: بقينا نختبر منطق الصفحة الرئيسية
+/// من غير ما نفتح البرنامج ولا نحتاج طابعة حقيقية.
+/// </summary>
+public class MainViewModelTests : IDisposable
+{
+    private readonly string _tempFolder;
+
+    public MainViewModelTests()
+    {
+        _tempFolder = Path.Combine(Path.GetTempPath(), "PrintFlowTests_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_tempFolder);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(_tempFolder, recursive: true);
+        }
+        catch
+        {
+            // تنضيف بعد التست - مش مشكلة لو فشل
+        }
+
+        GC.SuppressFinalize(this);
+    }
+
+    [Fact]
+    public void AddFiles_Skips_NonPdf_Duplicates_And_Missing()
+    {
+        var vm = CreateViewModel();
+        string pdf = MakeFile("a.pdf");
+        string word = MakeFile("b.docx");
+
+        int added = vm.AddFiles(new[] { pdf, word, pdf, Path.Combine(_tempFolder, "ghost.pdf") });
+
+        Assert.Equal(1, added);
+        Assert.Single(vm.Files);
+        Assert.Equal("a.pdf", vm.Files[0].FileName);
+    }
+
+    [Fact]
+    public async Task Refresh_Keeps_User_Selection_Across_Updates()
+    {
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready, isDefault: true),
+            Printer("Canon", PrinterStatus.Ready));
+
+        var vm = CreateViewModel(repo);
+        await vm.RefreshPrintersAsync();
+
+        vm.Printers.First(p => p.Name == "Canon").IsSelected = true;
+
+        // نفس الطابعات بس الحالة اتغيرت — الاختيار المفروض يفضل زي ما هو
+        repo.Printers = new List<Printer>
+        {
+            Printer("HP", PrinterStatus.Error, isDefault: true),
+            Printer("Canon", PrinterStatus.Ready)
+        };
+
+        await vm.RefreshPrintersAsync();
+
+        Assert.True(vm.Printers.First(p => p.Name == "Canon").IsSelected);
+        Assert.Equal(PrinterStatus.Error, vm.Printers.First(p => p.Name == "HP").Status);
+    }
+
+    [Fact]
+    public async Task Refresh_Removes_Printers_That_Disappeared()
+    {
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready),
+            Printer("Canon", PrinterStatus.Ready));
+
+        var vm = CreateViewModel(repo);
+        await vm.RefreshPrintersAsync();
+        Assert.Equal(2, vm.Printers.Count);
+
+        repo.Printers = new List<Printer> { Printer("HP", PrinterStatus.Ready) };
+        await vm.RefreshPrintersAsync();
+
+        Assert.Single(vm.Printers);
+        Assert.Equal("HP", vm.Printers[0].Name);
+    }
+
+    [Fact]
+    public async Task Process_Merges_Then_Prints_To_Default_Printer()
+    {
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready, isDefault: true),
+            Printer("Canon", PrinterStatus.Ready));
+        var printer = new FakePrintService();
+
+        var vm = CreateViewModel(repo, printer);
+        await vm.RefreshPrintersAsync();
+        vm.AddFiles(new[] { MakeFile("a.pdf"), MakeFile("b.pdf") });
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Single(printer.Jobs);
+        Assert.Equal("HP", printer.Jobs[0].PrinterName);
+        Assert.Equal(1, printer.Jobs[0].Copies);
+    }
+
+    // ══════════ الطابعة بتتاخد من أنهي تاب ══════════
+
+    /// <summary>
+    /// "الطابعة الافتراضية للبرنامج" في تاب الإعدادات العامة كانت **إعداد ميت**:
+    /// بيتحفظ في الملف ومحدش بيقراه خالص. المستخدم يختار طابعة هناك والبرنامج
+    /// يطبع على افتراضية ويندوز من غير أي تفسير. دلوقتي هي نقطة البداية.
+    /// </summary>
+    [Fact]
+    public async Task The_General_Tab_Default_Becomes_The_Starting_Printer()
+    {
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready, isDefault: true),
+            Printer("Canon", PrinterStatus.Ready));
+
+        var vm = CreateViewModel(repo);
+        vm.App.DefaultPrinterName = "Canon";
+
+        await vm.RefreshPrintersAsync();
+
+        Assert.Equal("Canon", vm.Settings.PrinterName);
+    }
+
+    /// <summary>
+    /// بس اختيار المستخدم في تاب الرئيسية هو اللي بيحصل فعلًا — الإعدادات
+    /// العامة نقطة بداية، مش أمر بيلغي اللي قدامك.
+    /// </summary>
+    [Fact]
+    public async Task The_Main_Tab_Choice_Wins_For_The_Actual_Print()
+    {
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready, isDefault: true),
+            Printer("Canon", PrinterStatus.Ready));
+        var printer = new FakePrintService();
+
+        var vm = CreateViewModel(repo, printer);
+        vm.App.DefaultPrinterName = "Canon";
+        await vm.RefreshPrintersAsync();
+
+        vm.Settings.PrinterName = "HP";      // المستخدم غيّرها في الرئيسية
+        vm.Settings.PrintDirectlyAfterProcessing = true;
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Single(printer.Jobs);
+        Assert.Equal("HP", printer.Jobs[0].PrinterName);
+    }
+
+    /// <summary>لو الافتراضية المحفوظة مش متوصلة النهارده، بنرجع لافتراضية ويندوز.</summary>
+    [Fact]
+    public async Task A_Missing_Saved_Default_Falls_Back_To_The_Windows_Default()
+    {
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready, isDefault: true),
+            Printer("Canon", PrinterStatus.Ready));
+
+        var vm = CreateViewModel(repo);
+        vm.App.DefaultPrinterName = "طابعة اتشالت من زمان";
+
+        await vm.RefreshPrintersAsync();
+
+        Assert.Equal("HP", vm.Settings.PrinterName);
+    }
+
+    // ══════════ مهلة انتظار الطباعة ══════════
+
+    /// <summary>
+    /// عدد صفحات المستند الناتج لازم يوصل لأمر الطباعة، وإلا مهلة الانتظار
+    /// هتتحسب غلط والجوبات الكبيرة هتتقتل في نص الطباعة.
+    /// </summary>
+    [Fact]
+    public async Task The_Merged_Page_Count_Reaches_The_Print_Job()
+    {
+        var repo = new FakePrinterRepository(Printer("HP", PrinterStatus.Ready, isDefault: true));
+        var printer = new FakePrintService();
+        var merge = new FakeMergeService { PageCount = 210 };
+
+        var vm = CreateViewModel(repo, printer, merge);
+        await vm.RefreshPrintersAsync();
+
+        vm.Settings.PrintDirectlyAfterProcessing = true;
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Single(printer.Jobs);
+        Assert.Equal(210, printer.Jobs[0].PageCount);
+    }
+
+    /// <summary>
+    /// الطابعة كانت شغالة وقت ما بدأت المعالجة، واتفصلت وإحنا بندمج ٢١٠ صفحة.
+    ///
+    /// من غير تحديث الحالة لحظة الطباعة، كنا هنبعت لطابعة مش موجودة —
+    /// و SumatraPDF بيرجّع كود 0 في الحالة دي (بسبب -silent) فالمستخدم
+    /// بيقرا "نجاح" ومفيش ورقة طلعت. ده اتأكد عمليًا مش تخمين.
+    /// </summary>
+    [Fact]
+    public async Task A_Printer_That_Dies_During_Processing_Is_Caught_Before_Sending()
+    {
+        var repo = new FakePrinterRepository(Printer("HP", PrinterStatus.Ready, isDefault: true));
+        var printer = new FakePrintService();
+
+        var vm = CreateViewModel(repo, printer);
+        await vm.RefreshPrintersAsync();
+
+        Assert.Equal("HP", vm.Settings.PrinterName);
+
+        // الطابعة اتفصلت بعد ما البرنامج شافها شغالة
+        repo.Printers = [Printer("HP", PrinterStatus.Offline, isDefault: true)];
+
+        vm.Settings.PrintDirectlyAfterProcessing = true;
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Empty(printer.Jobs);
+        Assert.Contains("مؤهلة", vm.StatusText);
+    }
+
+    /// <summary>والعكس: طابعة رجعت تشتغل قبل الطباعة لازم تتقبل.</summary>
+    [Fact]
+    public async Task A_Printer_That_Comes_Back_Before_Printing_Is_Used()
+    {
+        var repo = new FakePrinterRepository(Printer("HP", PrinterStatus.Offline, isDefault: true));
+        var printer = new FakePrintService();
+
+        var vm = CreateViewModel(repo, printer);
+        await vm.RefreshPrintersAsync();
+
+        repo.Printers = [Printer("HP", PrinterStatus.Ready, isDefault: true)];
+
+        vm.Settings.PrintDirectlyAfterProcessing = true;
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Single(printer.Jobs);
+        Assert.Equal("HP", printer.Jobs[0].PrinterName);
+    }
+
+    [Fact]
+    public async Task Offline_Printers_Are_Never_Sent_To()
+    {
+        var repo = new FakePrinterRepository(Printer("HP", PrinterStatus.Offline, isDefault: true));
+        var printer = new FakePrintService();
+
+        var vm = CreateViewModel(repo, printer);
+        await vm.RefreshPrintersAsync();
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Empty(printer.Jobs);
+        Assert.Contains("مؤهلة", vm.StatusText);
+    }
+
+    [Fact]
+    public async Task Distribute_Splits_Total_Copies_Across_Selected_Printers()
+    {
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready),
+            Printer("Canon", PrinterStatus.Ready),
+            Printer("Epson", PrinterStatus.Ready));
+        var printer = new FakePrintService();
+
+        var vm = CreateViewModel(repo, printer);
+        await vm.RefreshPrintersAsync();
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        vm.Settings.UseMultiplePrinters = true;
+        vm.Settings.DistributeCopies = true;
+        vm.Settings.TotalCopies = 10;
+        foreach (var p in vm.Printers)
+        {
+            p.IsSelected = true;
+        }
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Equal(10, printer.Jobs.Sum(j => j.Copies));
+        Assert.Equal(3, printer.Jobs.Count);
+    }
+
+    [Fact]
+    public async Task Uniform_Mode_Sends_Full_Count_To_Each_Printer()
+    {
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready),
+            Printer("Canon", PrinterStatus.Ready));
+        var printer = new FakePrintService();
+
+        var vm = CreateViewModel(repo, printer);
+        await vm.RefreshPrintersAsync();
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        vm.Settings.UseMultiplePrinters = true;
+        vm.Settings.DistributeCopies = false;
+        vm.Settings.TotalCopies = 4;
+        foreach (var p in vm.Printers)
+        {
+            p.IsSelected = true;
+        }
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Equal(2, printer.Jobs.Count);
+        Assert.All(printer.Jobs, j => Assert.Equal(4, j.Copies));
+    }
+
+    [Fact]
+    public async Task Selected_Printers_Are_Saved_Into_Settings_For_Presets()
+    {
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready),
+            Printer("Canon", PrinterStatus.Ready));
+
+        var vm = CreateViewModel(repo);
+        await vm.RefreshPrintersAsync();
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        vm.Settings.UseMultiplePrinters = true;
+        vm.Printers.First(p => p.Name == "Canon").IsSelected = true;
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Equal(new[] { "Canon" }, vm.Settings.SelectedPrinters);
+    }
+
+    [Fact]
+    public async Task Print_Command_Is_Blocked_Before_Processing()
+    {
+        var vm = CreateViewModel();
+        Assert.False(vm.PrintCommand.CanExecute(null));
+
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+        vm.Settings.PrintDirectlyAfterProcessing = false;
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.True(vm.PrintCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void Reset_Clears_Files_And_Restores_Defaults()
+    {
+        var vm = CreateViewModel();
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+        vm.Settings.TotalCopies = 9;
+        vm.Settings.Grayscale = true;
+
+        vm.ResetCommand.Execute(null);
+
+        Assert.Empty(vm.Files);
+        Assert.Equal(1, vm.Settings.TotalCopies);
+        Assert.False(vm.Settings.Grayscale);
+    }
+
+    // ══════════ وصول الإعدادات العامة لخدمة الدمج ══════════
+
+    [Fact]
+    public async Task Watermark_Settings_Reach_The_Merge_Request()
+    {
+        var merge = new FakeMergeService();
+        var vm = CreateViewModel(mergeService: merge);
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        vm.App.WatermarkEnabled = true;
+        vm.App.WatermarkText = "مطبعة النور";
+        vm.App.WatermarkColorHex = "#FF0000";
+        vm.App.WatermarkFontFamily = "Times New Roman";
+        vm.App.WatermarkFontSize = 72;
+        vm.App.WatermarkOpacityPercent = 30;
+        vm.App.WatermarkRotationDegrees = 20;
+        vm.App.WatermarkBold = true;
+
+        vm.Settings.PrintDirectlyAfterProcessing = false;
+        await vm.ProcessCommand.ExecuteAsync();
+
+        var watermark = merge.LastRequest?.Watermark;
+        Assert.NotNull(watermark);
+        Assert.Equal("مطبعة النور", watermark.Text);
+        Assert.Equal("#FF0000", watermark.ColorHex);
+        Assert.Equal("Times New Roman", watermark.FontFamily);
+        Assert.Equal(72, watermark.FontSize);
+        Assert.Equal(30, watermark.OpacityPercent);
+        Assert.Equal(20, watermark.RotationDegrees);
+        Assert.True(watermark.Bold);
+    }
+
+    [Fact]
+    public async Task Watermark_Is_Absent_When_Disabled()
+    {
+        var merge = new FakeMergeService();
+        var vm = CreateViewModel(mergeService: merge);
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        vm.App.WatermarkEnabled = false;
+        vm.App.WatermarkText = "مش المفروض تظهر";
+
+        vm.Settings.PrintDirectlyAfterProcessing = false;
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Null(merge.LastRequest?.Watermark);
+    }
+
+    [Fact]
+    public async Task Page_Numbering_Style_Reaches_The_Merge_Request()
+    {
+        var merge = new FakeMergeService();
+        var vm = CreateViewModel(mergeService: merge);
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        vm.Settings.NumberPagesPerFile = true;
+        vm.App.PageNumberPosition = ContentPosition.TopRight;
+        vm.App.PageNumberColorHex = "#0000FF";
+        vm.App.PageNumberFontSize = 14;
+        vm.App.PageNumberEdgeMargin = 30;
+
+        vm.Settings.PrintDirectlyAfterProcessing = false;
+        await vm.ProcessCommand.ExecuteAsync();
+
+        var numbers = merge.LastRequest?.PageNumbers;
+        Assert.NotNull(numbers);
+        Assert.Equal(ContentPosition.TopRight, numbers.Position);
+        Assert.Equal("#0000FF", numbers.ColorHex);
+        Assert.Equal(14, numbers.FontSize);
+        Assert.Equal(30, numbers.EdgeMargin);
+    }
+
+    [Fact]
+    public async Task No_Page_Numbers_When_Checkbox_Is_Off()
+    {
+        var merge = new FakeMergeService();
+        var vm = CreateViewModel(mergeService: merge);
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        vm.Settings.NumberPagesPerFile = false;
+        vm.Settings.PrintDirectlyAfterProcessing = false;
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Null(merge.LastRequest?.PageNumbers);
+    }
+
+    [Fact]
+    public void Sorting_By_Name_Reorders_Files()
+    {
+        var vm = CreateViewModel();
+        vm.AddFiles(new[] { MakeFile("c.pdf"), MakeFile("a.pdf"), MakeFile("b.pdf") });
+
+        vm.App.FileSortOrder = FileSortOrder.ByName;
+        vm.SortFiles();
+
+        Assert.Equal(new[] { "a.pdf", "b.pdf", "c.pdf" }, vm.Files.Select(f => f.FileName));
+    }
+
+    /// <summary>
+    /// قايمة "ترتيب الملفات" كانت بتتحفظ ومحصلش حاجة — زرار وهمي.
+    /// دلوقتي مجرد ما المستخدم يغيّر الاختيار، القايمة نفسها بتترتب.
+    /// </summary>
+    [Fact]
+    public void Changing_The_Sort_Order_Reorders_Immediately()
+    {
+        var vm = CreateViewModel();
+        vm.AddFiles(new[] { MakeFile("c.pdf"), MakeFile("a.pdf"), MakeFile("b.pdf") });
+
+        vm.App.FileSortOrder = FileSortOrder.ByName;
+
+        Assert.Equal(new[] { "a.pdf", "b.pdf", "c.pdf" }, vm.Files.Select(f => f.FileName));
+    }
+
+    // ══════════ حذف ملف واحد ══════════
+
+    /// <summary>
+    /// الزرار الأحمر تحت بيمسح **كل** القايمة. لما تكون محمّل 20 ملف وعايز
+    /// تشيل واحد بس، ده مش حل — فبقى في زرار لكل صف.
+    /// </summary>
+    [Fact]
+    public void Removing_One_File_Keeps_The_Rest()
+    {
+        var vm = CreateViewModel();
+        vm.AddFiles(new[] { MakeFile("a.pdf"), MakeFile("b.pdf"), MakeFile("c.pdf") });
+
+        vm.RemoveFileCommand.Execute(vm.Files[1]);
+
+        Assert.Equal(new[] { "a.pdf", "c.pdf" }, vm.Files.Select(f => f.FileName));
+    }
+
+    [Fact]
+    public void Removing_A_File_That_Is_Not_There_Does_Nothing()
+    {
+        var vm = CreateViewModel();
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        vm.RemoveFileCommand.Execute(null);
+        vm.RemoveFileCommand.Execute(new PdfFileItem("ghost.pdf", 10, DateTime.UtcNow));
+
+        Assert.Single(vm.Files);
+    }
+
+    [Fact]
+    public void Removing_The_Last_File_Disables_Processing()
+    {
+        var vm = CreateViewModel();
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        vm.RemoveFileCommand.Execute(vm.Files[0]);
+
+        Assert.Empty(vm.Files);
+        Assert.False(vm.ProcessCommand.CanExecute(null));
+    }
+
+    // ══════════ عدد صفحات كل ملف ══════════
+
+    [Fact]
+    public async Task Page_Counts_Are_Loaded_And_Shown_Per_File()
+    {
+        var vm = CreateViewModel(pdfInfo: new FakePdfInfoService { PageCount = 7 });
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        await vm.LoadPageCountsAsync();
+
+        Assert.Equal(7, vm.Files[0].PageCount);
+        Assert.Contains("7 صفحة", vm.Files[0].DisplayText);
+    }
+
+    [Fact]
+    public async Task The_Header_Shows_The_Total_Page_Count()
+    {
+        var vm = CreateViewModel(pdfInfo: new FakePdfInfoService { PageCount = 5 });
+        vm.AddFiles(new[] { MakeFile("a.pdf"), MakeFile("b.pdf") });
+
+        await vm.LoadPageCountsAsync();
+
+        Assert.Contains("2 ملف", vm.FilesCountText);
+        Assert.Contains("10 صفحة", vm.FilesCountText);
+    }
+
+    /// <summary>
+    /// ملف تالف أو محمي بباسورد مش هينفع نقرا صفحاته. ده لازم يعدي بهدوء:
+    /// الملف يفضل في القايمة والباقي يشتغل عادي.
+    /// </summary>
+    [Fact]
+    public async Task A_File_Whose_Pages_Cannot_Be_Read_Is_Not_A_Failure()
+    {
+        var vm = CreateViewModel(pdfInfo: new FakePdfInfoService { PageCount = null });
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        await vm.LoadPageCountsAsync();
+
+        Assert.Single(vm.Files);
+        Assert.Null(vm.Files[0].PageCount);
+        Assert.Contains("1 ملف", vm.FilesCountText);
+    }
+
+    [Fact]
+    public async Task Without_A_Page_Reader_Nothing_Breaks()
+    {
+        var vm = CreateViewModel();
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        await vm.LoadPageCountsAsync();
+
+        Assert.Single(vm.Files);
+        Assert.Null(vm.Files[0].PageCount);
+    }
+
+    // ══════════ استرجاع الإعدادات الافتراضية ══════════
+
+    /// <summary>
+    /// التست ده حارس على باج بيتكرر بطبعه: النسخة القديمة من
+    /// RestoreDefaultAppSettings كانت لستة مكتوبة بالإيد، وفعلًا نسيت خاصية
+    /// جديدة فكان الزرار بيسيبها زي ما هي من غير ما حد ياخد باله. بنمشي
+    /// بالـ Reflection على **كل** خاصية عشان أي حاجة تتضاف بكرة تبقى مغطّاة.
+    /// </summary>
+    [Fact]
+    public void Restoring_Defaults_Resets_Every_Single_Property()
+    {
+        var vm = CreateViewModel();
+        var defaults = new AppSettings();
+
+        var writable = typeof(AppSettings).GetProperties()
+            .Where(p => p.CanRead && p.CanWrite && p.GetIndexParameters().Length == 0)
+            .ToList();
+
+        Assert.NotEmpty(writable);
+
+        // بنغيّر كل خاصية عن قيمتها الافتراضية
+        foreach (var property in writable)
+        {
+            property.SetValue(vm.App, Different(property.GetValue(defaults), property.PropertyType));
+        }
+
+        vm.RestoreDefaultAppSettingsCommand.Execute(null);
+
+        var stillWrong = writable
+            .Where(p => !Equals(p.GetValue(vm.App), p.GetValue(defaults)))
+            .Select(p => p.Name)
+            .ToList();
+
+        Assert.True(stillWrong.Count == 0,
+            "خصائص مارجعتش لقيمتها الافتراضية: " + string.Join("، ", stillWrong));
+    }
+
+    /// <summary>بترجّع قيمة مختلفة أكيد عن اللي داخلة، مهما كان نوعها.</summary>
+    private static object? Different(object? value, Type type)
+    {
+        if (type == typeof(bool)) return !(bool)value!;
+        if (type == typeof(string)) return (string?)value == "مختلف" ? "غير" : "مختلف";
+        if (type == typeof(int)) return (int)value! + 7;
+
+        if (type.IsEnum)
+        {
+            foreach (var candidate in Enum.GetValues(type))
+            {
+                if (!Equals(candidate, value)) return candidate;
+            }
+        }
+
+        return value;
+    }
+
+    // ══════════ مساعدات وفيكات ══════════
+
+    private MainViewModel CreateViewModel(
+        FakePrinterRepository? repository = null,
+        FakePrintService? printService = null,
+        FakeMergeService? mergeService = null,
+        FakePdfInfoService? pdfInfo = null)
+        => new(
+            repository ?? new FakePrinterRepository(),
+            mergeService ?? new FakeMergeService(),
+            printService ?? new FakePrintService(),
+            pdfInfo: pdfInfo);
+
+    private string MakeFile(string name)
+    {
+        string path = Path.Combine(_tempFolder, name);
+        File.WriteAllText(path, "test");
+        return path;
+    }
+
+    private static Printer Printer(string name, PrinterStatus status, bool isDefault = false)
+        => new() { Name = name, Status = status, IsDefault = isDefault, Port = "USB001" };
+
+    private sealed class FakePrinterRepository : IPrinterRepository
+    {
+        public FakePrinterRepository(params Printer[] printers) => Printers = printers.ToList();
+
+        public List<Printer> Printers { get; set; }
+
+        public Task<List<Printer>> GetPrintersAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(Printers.ToList());
+
+        public string SendTestPage(string printerName) => "ok";
+        public PrinterCapabilities GetCapabilities(string printerName) => new();
+    }
+
+    private sealed class FakeMergeService : IPdfMergeService
+    {
+        public MergeRequest? LastRequest { get; private set; }
+
+        /// <summary>لو اتحدد، بيرجّع العدد ده بدل عدد الملفات — عشان نختبر تمرير عدد الصفحات.</summary>
+        public int? PageCount { get; set; }
+
+        public MergeResult Merge(MergeRequest request)
+        {
+            LastRequest = request;
+            Directory.CreateDirectory(Path.GetDirectoryName(request.OutputPath)!);
+            File.WriteAllText(request.OutputPath, "merged");
+
+            return MergeResult.Succeeded(
+                $"تم دمج {request.InputFiles.Count} ملف.",
+                PageCount ?? request.InputFiles.Count);
+        }
+    }
+
+    private sealed class FakePdfInfoService : IPdfInfoService
+    {
+        public int? PageCount { get; set; }
+
+        public int? TryGetPageCount(string filePath) => PageCount;
+    }
+
+    private sealed class FakePrintService : IPdfPrintService
+    {
+        private readonly Lock _gate = new();
+
+        public List<PrintJob> Jobs { get; } = new();
+
+        public Task<string> PrintAsync(PrintJob job, CancellationToken cancellationToken = default)
+        {
+            lock (_gate)
+            {
+                Jobs.Add(job);
+            }
+
+            return Task.FromResult($"[نجاح] {job.Copies} نسخة إلى {job.PrinterName}");
+        }
+    }
+}

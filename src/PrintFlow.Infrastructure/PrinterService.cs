@@ -103,38 +103,4 @@ public class PrinterService : IPrinterRepository
             DefaultPaperSize = settings.DefaultPageSettings?.PaperSize?.PaperName
         };
     }
-    public string SendCopies(string printerName, int copies)
-{
-    if (copies <= 0)
-    {
-        return $"[تخطي] '{printerName}' نصيبها صفر نسخة، مفيش حاجة تتبعت.";
-    }
-
-    try
-    {
-        using var document = new PrintDocument();
-        document.PrinterSettings.PrinterName = printerName;
-
-        if (!document.PrinterSettings.IsValid)
-        {
-            return $"[فشل] البرنتر '{printerName}' غير صالحة للطباعة حاليًا.";
-        }
-
-        document.PrinterSettings.Copies = (short)copies;
-
-        document.PrintPage += (sender, e) =>
-        {
-            using var font = new Font("Arial", 14);
-            string text = $"PrintFlow Job\nPrinter: {printerName}\nCopies: {copies}\nTime: {DateTime.Now}";
-            e.Graphics?.DrawString(text, font, Brushes.Black, new PointF(50, 50));
-        };
-
-        document.Print();
-        return $"[نجاح] تم إرسال {copies} نسخة إلى '{printerName}'.";
-    }
-    catch (Exception ex)
-    {
-        return $"[فشل] لم يتم الإرسال إلى '{printerName}'. السبب: {ex.Message}";
-    }
-}
 }

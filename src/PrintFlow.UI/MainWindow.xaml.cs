@@ -1,262 +1,154 @@
-﻿using System.IO;
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Threading;
 using Microsoft.Win32;
-using PrintFlow.Application;
-using PrintFlow.Domain;
 using PrintFlow.Infrastructure;
+using PrintFlow.Presentation;
 
 namespace PrintFlow.UI;
 
+/// <summary>
+/// الـ code-behind فيه حاجتين بس: تركيب الـ ViewModel، والحاجات اللي هي فعلًا
+/// شغل واجهة (السحب والإفلات ونوافذ اختيار الملفات والمجلدات).
+/// أي منطق أعمال عايش في MainViewModel — المبني على Interfaces والقابل للاختبار.
+/// </summary>
 public partial class MainWindow : Window
 {
-    private readonly IPrinterRepository _printerRepository = new PrinterService();
-    private readonly IPdfPrintService _pdfPrintService = new PdfPrintService();
-    private readonly IPdfMergeService _pdfMergeService = new PdfMergeService();
-
-    private readonly DispatcherTimer _refreshTimer;
-    private CancellationTokenSource? _refreshCts;
-    private bool _isRefreshing;
-    private List<Printer> _lastPrinters = new();
-    private List<string> _loadedFiles = new();
-    private string? _mergedFilePath;
+    private readonly MainViewModel _viewModel;
+    private readonly FileJobLog _jobLog = new();
+    private readonly CancellationTokenSource _lifetimeCts = new();
 
     public MainWindow()
     {
         InitializeComponent();
 
-        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-        _refreshTimer.Tick += async (s, e) => await RefreshPrintersAsync(false);
-        _refreshTimer.Start();
+        // مخزن واحد بيخدم الإعدادات العامة والإعدادات المسبقة، الاتنين في %AppData%\PrintFlow
+        var store = new JsonSettingsStore();
 
-        Closed += (s, e) =>
-        {
-            _refreshTimer.Stop();
-            _refreshCts?.Cancel();
-        };
+        _viewModel = new MainViewModel(
+            new PrinterService(),
+            new PdfMergeService(),
+            new PdfPrintService(),
+            store,
+            store,
+            new WindowsFontCatalog(),
+            _jobLog,
+            new PdfInfoService(),
+            ReadVersion());
 
-        _ = RefreshPrintersAsync(false);
+        DataContext = _viewModel;
+
+        Loaded += OnLoaded;
+        Closed += OnClosed;
     }
 
-    private async void RefreshButton_Click(object sender, RoutedEventArgs e)
+    /// <summary>رقم النسخة من الـ assembly — عشان أي بلاغ من التجربة نعرف هو من أنهي بيلد.</summary>
+    private static string ReadVersion()
     {
-        await RefreshPrintersAsync(true);
+        var version = Assembly.GetEntryAssembly()?.GetName().Version;
+        return version is null ? "" : $"v{version.Major}.{version.Minor}.{version.Build}";
     }
 
-    private async Task RefreshPrintersAsync(bool isManualRefresh)
+    private void OpenLogFolder_Click(object sender, RoutedEventArgs e)
     {
-        if (_isRefreshing) return;
-
-        _isRefreshing = true;
-        _refreshCts = new CancellationTokenSource();
-
         try
         {
-            var printers = await _printerRepository.GetPrintersAsync(_refreshCts.Token);
-            _lastPrinters = printers;
-
-            var previouslySelected = PrintersListBox.SelectedItems
-                .Cast<string>()
-                .Select(ExtractPrinterName)
-                .ToList();
-
-            PrintersListBox.Items.Clear();
-            foreach (var printer in printers)
-            {
-                string defaultTag = printer.IsDefault ? " (افتراضية)" : "";
-                string displayItem = $"{printer.Name}{defaultTag} — {printer.Status} — {printer.Port}";
-                PrintersListBox.Items.Add(displayItem);
-
-                if (previouslySelected.Contains(printer.Name))
-                {
-                    PrintersListBox.SelectedItems.Add(displayItem);
-                }
-            }
-
-            this.Title = $"PrintFlow - تم العثور على {printers.Count} برنتر | آخر تحديث: {DateTime.Now:HH:mm:ss}";
+            Directory.CreateDirectory(_jobLog.LogFolder);
+            Process.Start(new ProcessStartInfo(_jobLog.LogFolder) { UseShellExecute = true });
         }
-        catch (OperationCanceledException) { }
-        finally
+        catch (Exception ex)
         {
-            _isRefreshing = false;
+            MessageBox.Show($"مقدرناش نفتح مجلد اللوج: {ex.Message}");
         }
     }
 
-    private static string ExtractPrinterName(string displayText)
+    private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        int dashIndex = displayText.IndexOf(" —");
-        return (dashIndex > 0 ? displayText[..dashIndex] : displayText).Replace(" (افتراضية)", "");
+        _jobLog.Info($"تشغيل PrintFlow {ReadVersion()} — ويندوز {Environment.OSVersion.Version}");
+
+        // التحديث الدوري بيشتغل كحلقة async. الـ await بيرجّع التنفيذ لثريد الواجهة
+        // لوحده، فتحديث قايمة الطابعات آمن من غير Dispatcher.Invoke.
+        _ = _viewModel.RunAutoRefreshAsync(_lifetimeCts.Token);
     }
 
-    private void MultiPrinterCheckBox_Changed(object sender, RoutedEventArgs e)
+    private void OnClosed(object? sender, EventArgs e)
     {
-        MultiPrinterPanel.Visibility = MultiPrinterCheckBox.IsChecked == true
-            ? Visibility.Visible
-            : Visibility.Collapsed;
+        _lifetimeCts.Cancel();
+        _lifetimeCts.Dispose();
+
+        // الإعدادات المسبقة بتتحفظ لحظة ما تتغير؛ التفضيلات العامة بتتحفظ هنا مرة واحدة
+        _viewModel.SaveAppSettings();
+        _jobLog.Info("إغلاق البرنامج");
     }
+
+    // ══════════ الملفات ══════════
 
     private void FileDropArea_DragOver(object sender, DragEventArgs e)
     {
-        e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop)
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
         e.Handled = true;
     }
 
     private void FileDropArea_Drop(object sender, DragEventArgs e)
     {
-        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
-
-        var droppedFiles = (string[])e.Data.GetData(DataFormats.FileDrop);
-        var pdfFiles = droppedFiles.Where(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)).ToList();
-
-        if (pdfFiles.Count == 0)
+        if (e.Data.GetDataPresent(DataFormats.FileDrop) &&
+            e.Data.GetData(DataFormats.FileDrop) is string[] paths)
         {
-            ResultText_SetIfExists("الملفات المسحوبة لازم تكون PDF.");
-            return;
+            _viewModel.AddFiles(paths);
         }
-
-        AddFilesToList(pdfFiles);
     }
 
-    private void FileDropArea_Click(object sender, RoutedEventArgs e)
+    private void FileDropArea_Click(object sender, MouseButtonEventArgs e) => PickFiles();
+
+    private void LoadFilesButton_Click(object sender, RoutedEventArgs e) => PickFiles();
+
+    private void PickFiles()
     {
-        var dialog = new OpenFileDialog { Filter = "PDF Files (*.pdf)|*.pdf", Multiselect = true };
+        var dialog = new OpenFileDialog
+        {
+            Filter = "ملفات PDF (*.pdf)|*.pdf",
+            Multiselect = true
+        };
+
         if (dialog.ShowDialog() == true)
         {
-            AddFilesToList(dialog.FileNames.ToList());
+            _viewModel.AddFiles(dialog.FileNames);
         }
     }
 
-    private void FileDropArea_Click(object sender, MouseButtonEventArgs e) => FileDropArea_Click(sender, (RoutedEventArgs)null!);
+    // ══════════ الإعدادات العامة ══════════
 
-    private void AddFilesToList(List<string> newFiles)
+    private void PickOutputFolder_Click(object sender, RoutedEventArgs e)
     {
-        foreach (var file in newFiles)
+        var dialog = new OpenFolderDialog
         {
-            if (!_loadedFiles.Contains(file))
-            {
-                _loadedFiles.Add(file);
-            }
-        }
+            Title = "اختر مجلد الحفظ الافتراضي"
+        };
 
-        LoadedFilesListBox.Items.Clear();
-        foreach (var file in _loadedFiles)
+        if (dialog.ShowDialog() == true)
         {
-            LoadedFilesListBox.Items.Add(Path.GetFileName(file));
+            _viewModel.App.DefaultOutputFolder = dialog.FolderName;
         }
     }
 
-    private void MergeButton_Click(object sender, RoutedEventArgs e)
+    private void ClearOutputFolder_Click(object sender, RoutedEventArgs e)
+        => _viewModel.App.DefaultOutputFolder = string.Empty;
+
+    private void PickWatermarkImage_Click(object sender, RoutedEventArgs e)
     {
-        if (_loadedFiles.Count == 0)
+        var dialog = new OpenFileDialog
         {
-            MessageBox.Show("حمّل ملفات الأول.");
-            return;
+            Title = "اختر صورة العلامة المائية",
+            Filter = "الصور (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp"
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            _viewModel.App.WatermarkImagePath = dialog.FileName;
         }
-
-        string outputFolder = Path.Combine(Path.GetTempPath(), "PrintFlow");
-        Directory.CreateDirectory(outputFolder);
-        _mergedFilePath = Path.Combine(outputFolder, $"merged_{DateTime.Now:yyyyMMdd_HHmmss}.pdf");
-
-        string? watermark = string.IsNullOrWhiteSpace(WatermarkTextBox.Text) ? null : WatermarkTextBox.Text;
-        bool addPageNumbers = PageNumbersCheckBox.IsChecked == true;
-
-        string result = _pdfMergeService.MergeFiles(_loadedFiles, _mergedFilePath, watermark, addPageNumbers);
-        MessageBox.Show(result);
     }
-
-    private async void PrintToAllButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (string.IsNullOrEmpty(_mergedFilePath) || !File.Exists(_mergedFilePath))
-        {
-            MessageBox.Show("اضغط \"بدء معالجة الملفات\" الأول قبل الطباعة.");
-            return;
-        }
-
-        if (!int.TryParse(CopiesPerPrinterTextBox.Text, out int totalCopiesEntered) || totalCopiesEntered <= 0)
-        {
-            MessageBox.Show("اكتب عدد نسخ صحيح.");
-            return;
-        }
-
-        string paperSize = (PaperSizeComboBox.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "A4";
-        bool grayscale = GrayscaleCheckBox.IsChecked == true;
-        bool duplex = DuplexCheckBox.IsChecked == true;
-        bool multiPrinterMode = MultiPrinterCheckBox.IsChecked == true;
-        bool distributeMode = DistributeCheckBox.IsChecked == true;
-
-        // تحديد البرنترات المستهدفة حسب الوضع
-        List<Printer> targetPrinters;
-        if (multiPrinterMode)
-        {
-            var selectedNames = PrintersListBox.SelectedItems.Cast<string>().Select(ExtractPrinterName).ToList();
-            targetPrinters = _lastPrinters.Where(p => selectedNames.Contains(p.Name)).ToList();
-        }
-        else
-        {
-            // وضع طابعة واحدة: نستخدم الافتراضية تلقائيًا
-            targetPrinters = _lastPrinters.Where(p => p.IsDefault).ToList();
-            if (targetPrinters.Count == 0 && _lastPrinters.Count > 0)
-            {
-                targetPrinters = new List<Printer> { _lastPrinters[0] };
-            }
-        }
-
-        var eligible = PrinterSelectionRules.FilterEligible(targetPrinters);
-
-        if (eligible.Count == 0)
-        {
-            MessageBox.Show("مفيش برنتر مؤهلة متاحة حاليًا.");
-            return;
-        }
-
-        string mergedFilePath = _mergedFilePath;
-
-        var resultLines = await Task.Run(() =>
-        {
-            var lines = new List<string>();
-
-            if (distributeMode && eligible.Count > 1)
-            {
-                // توزيع إجمالي النسخ على البرنترات
-                var distribution = CopyDistributionCalculator.Distribute(totalCopiesEntered, eligible.Select(p => p.Name).ToList());
-                foreach (var item in distribution)
-                {
-                    lines.Add(_pdfPrintService.PrintPdf(mergedFilePath, item.PrinterName, paperSize, item.CopiesAssigned, grayscale, duplex));
-                }
-            }
-            else
-            {
-                // نفس عدد النسخ على كل برنتر، بالتوازي
-                var results = new System.Collections.Concurrent.ConcurrentDictionary<int, string>();
-                Parallel.For(0, eligible.Count, i =>
-                {
-                    var printer = eligible[i];
-                    results[i] = _pdfPrintService.PrintPdf(mergedFilePath, printer.Name, paperSize, totalCopiesEntered, grayscale, duplex);
-                });
-                lines.AddRange(Enumerable.Range(0, eligible.Count).Select(i => results[i]));
-            }
-
-            return lines;
-        });
-
-        MessageBox.Show(string.Join("\n", resultLines));
-    }
-
-    private void ResetButton_Click(object sender, RoutedEventArgs e)
-    {
-        _loadedFiles.Clear();
-        LoadedFilesListBox.Items.Clear();
-        WatermarkTextBox.Text = "";
-        PageNumbersCheckBox.IsChecked = false;
-        GrayscaleCheckBox.IsChecked = false;
-        DuplexCheckBox.IsChecked = false;
-        MultiPrinterCheckBox.IsChecked = false;
-        DistributeCheckBox.IsChecked = false;
-        CopiesPerPrinterTextBox.Text = "1";
-        _mergedFilePath = null;
-    }
-
-    private void ResultText_SetIfExists(string text) => MessageBox.Show(text);
 }

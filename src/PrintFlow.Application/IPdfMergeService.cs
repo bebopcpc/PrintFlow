@@ -1,6 +1,11 @@
+using PrintFlow.Domain;
+
 namespace PrintFlow.Application;
 
 public interface IPdfMergeService
 {
-    string MergeFiles(List<string> inputFilePaths, string outputPath, string? watermarkText = null, bool addPageNumbers = false);
+    /// <summary>
+    /// بيدمج الملفات ويحط عليها الترقيم والعلامة المائية والنص المخصص حسب الطلب.
+    /// </summary>
+    MergeResult Merge(MergeRequest request);
 }
