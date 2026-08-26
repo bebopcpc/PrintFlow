@@ -57,6 +57,61 @@ public sealed class AppSettings : ObservableObject
         set => SetProperty(ref _defaultOutputFolder, value, v => v ?? string.Empty);
     }
 
+    private bool _receiveFromVirtualPrinter;
+    /// <summary>
+    /// استقبال الجوبات اللي بتتطبع على طابعة PrintFlow.
+    ///
+    /// مقفول افتراضيًا عن قصد: الطابعة نفسها محتاجة تسطيب بصلاحيات مدير
+    /// (install-printer.ps1)، فالخيار ده مالوش أي معنى لحد ما المستخدم
+    /// يعمل الخطوة دي.
+    ///
+    /// معلّم كـ <see cref="ConnectionSettingAttribute"/>: زرار "استعادة
+    /// الإعدادات الافتراضية" بيسيبه زي ما هو. اقفال الاستقبال من غير ما
+    /// المستخدم يقصد بيخلّي الشغل الجاي من بره يضيع في صمت.
+    /// </summary>
+    [ConnectionSetting]
+    public bool ReceiveFromVirtualPrinter
+    {
+        get => _receiveFromVirtualPrinter;
+        set => SetProperty(ref _receiveFromVirtualPrinter, value);
+    }
+
+    private string _hotFolder = string.Empty;
+    /// <summary>
+    /// مجلد بيتراقب — أي PDF أو صورة تتحط فيه بتتحمّل تلقائيًا.
+    ///
+    /// لو المجلد ده مشارك على الشبكة، كل أجهزة المطبعة تقدر ترمي فيه
+    /// وجهاز واحد بس هو اللي بيطبع.
+    ///
+    /// معلّم كـ <see cref="ConnectionSettingAttribute"/> — ده مسار اتظبط
+    /// مرة واحدة، ومسحه معناه إن كل الأجهزة التانية بتبعت في الفاضي.
+    /// </summary>
+    [ConnectionSetting]
+    public string HotFolder
+    {
+        get => _hotFolder;
+        set => SetProperty(ref _hotFolder, value, v => v ?? string.Empty);
+    }
+
+    private bool _printReceivedAutomatically;
+    /// <summary>
+    /// الجوب الوارد يتعالج ويتطبع لوحده، ولا يستنى في القايمة؟
+    ///
+    /// الافتراضي "يستنى" عن قصد: ورق بيطلع من غير ما حد ضغط حاجة ده سلوك
+    /// مخيف في مطبعة. المستخدم اللي يقرر إنه عايز الأتوماتيك.
+    ///
+    /// معلّم كـ <see cref="ConnectionSettingAttribute"/> مع إخواته: التلاتة
+    /// دول وحدة واحدة — "المطبعة موصولة إزاي بالشغل الجاي من بره". لو زرار
+    /// الافتراضي رجّع اتنين وساب واحد، الميزة تفضل نص شغالة وده أصعب في
+    /// الفهم من إنها تتقفل كلها.
+    /// </summary>
+    [ConnectionSetting]
+    public bool PrintReceivedAutomatically
+    {
+        get => _printReceivedAutomatically;
+        set => SetProperty(ref _printReceivedAutomatically, value);
+    }
+
     private int _printerRefreshSeconds = 10;
     /// <summary>
     /// كل كام ثانية نعيد قراءة حالة الطابعات. استعلام WMI ممكن ياخد ثانية أو اتنين

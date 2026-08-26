@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Win32;
+using PrintFlow.Domain;
 using PrintFlow.Infrastructure;
 using PrintFlow.Presentation;
 
@@ -37,7 +38,11 @@ public partial class MainWindow : Window
             _jobLog,
             new PdfInfoService(),
             new PdfSlideComposer(),
-            ReadVersion());
+            new PdfPageScaler(),
+            new ImageToPdfConverter(),
+            new IncomingJobWatcher(),
+            ReadVersion(),
+            new WmiPrinterHealth());
 
         DataContext = _viewModel;
 
@@ -72,12 +77,18 @@ public partial class MainWindow : Window
         // التحديث الدوري بيشتغل كحلقة async. الـ await بيرجّع التنفيذ لثريد الواجهة
         // لوحده، فتحديث قايمة الطابعات آمن من غير Dispatcher.Invoke.
         _ = _viewModel.RunAutoRefreshAsync(_lifetimeCts.Token);
+
+        // الاستقبال بيشتغل حسب الإعدادات المحفوظة، وبيلقط كمان أي جوبات
+        // كانت مستنية في الطابور من قبل ما البرنامج يفتح
+        _viewModel.ApplyReceptionSettings();
     }
 
     private void OnClosed(object? sender, EventArgs e)
     {
         _lifetimeCts.Cancel();
         _lifetimeCts.Dispose();
+
+        _viewModel.StopReception();
 
         // الإعدادات المسبقة بتتحفظ لحظة ما تتغير؛ التفضيلات العامة بتتحفظ هنا مرة واحدة
         _viewModel.SaveAppSettings();
@@ -111,7 +122,9 @@ public partial class MainWindow : Window
     {
         var dialog = new OpenFileDialog
         {
-            Filter = "ملفات PDF (*.pdf)|*.pdf",
+            // الفلتر بيتبني من نفس قايمة الامتدادات اللي التحميل بيستخدمها،
+            // عشان ما يحصلش إن صيغة تبان في المربع وترفض وقت التحميل
+            Filter = SupportedInput.OpenDialogFilter,
             Multiselect = true
         };
 
@@ -120,6 +133,24 @@ public partial class MainWindow : Window
             _viewModel.AddFiles(dialog.FileNames);
         }
     }
+
+    // ══════════ الاستقبال من بره البرنامج ══════════
+
+    private void ChooseHotFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFolderDialog
+        {
+            Title = "اختار المجلد اللي البرنامج هيراقبه"
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            _viewModel.App.HotFolder = dialog.FolderName;
+        }
+    }
+
+    private void ClearHotFolder_Click(object sender, RoutedEventArgs e)
+        => _viewModel.App.HotFolder = string.Empty;
 
     // ══════════ الإعدادات العامة ══════════
 

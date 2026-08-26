@@ -22,6 +22,7 @@
         <local:PercentToOpacityConverter x:Key="PercentToOpacity"/>
         <local:NegateConverter x:Key="Negate"/>
         <local:ContentPositionToAlignmentConverter x:Key="PositionToAlign"/>
+        <local:WarningBrushConverter x:Key="WarningBrush"/>
 
         <Style TargetType="GroupBox">
             <Setter Property="Margin" Value="0,0,0,10"/>
@@ -136,25 +137,32 @@
                                                   ToolTip="مفتوحة = كل الملفات تبقى مستند واحد.&#10;مقفولة = كل ملف يفضل لوحده، والعلامة المائية والترقيم بيتحطوا على كل واحد فيهم."/>
                                         <CheckBox Content="حفظ الملفات المحوّلة لـ PDF"
                                                   IsChecked="{Binding Settings.SaveConvertedToPdf}"
-                                                  IsEnabled="False" Foreground="{StaticResource MutedBrush}"/>
+                                                  ToolTip="الصور بتتحوّل لـ PDF أول ما تتحمّل.&#10;مفتوحة = النسخة المحوّلة بتتحفظ في المجلد الافتراضي.&#10;مقفولة = بتروح للتيمب وبتتمسح بعد أيام."/>
                                         <CheckBox Content="حفظ الملفات بعد المعالجة"
                                                   IsChecked="{Binding Settings.SaveAfterProcessing}"
                                                   ToolTip="بيحفظ الملفات المعالجة في &quot;المجلد الافتراضي&quot; من تاب الإعدادات العامة بدل التيمب.&#10;من غيرها الملفات بتتمسح بعد أيام."/>
 
-                                        <TextBlock Text="ضغط الملفات" Style="{StaticResource FieldLabel}"/>
+                                        <TextBlock Text="ضغط الملفات (قريبًا)" Style="{StaticResource FieldLabel}"/>
                                         <ComboBox ItemsSource="{Binding CompressionModes}"
                                                   DisplayMemberPath="Label" SelectedValuePath="Value"
                                                   SelectedValue="{Binding Settings.Compression}"
-                                                  IsEnabled="False"/>
+                                                  IsEnabled="False"
+                                                  ToolTip="اتقاس فعليًا: إعادة حفظ الـ PDF بتوفّر صفر تقريبًا — الملفات أصلًا مضغوطة.&#10;التوفير الحقيقي بيجي من تصغير دقة الصور جوه المستند (٤٥-٧٠٪ على المستندات الممسوحة)،&#10;وده محتاج أداة خارجية. مقفول لحد ما يتبني صح بدل ما يبان شغال وهو مش بيعمل حاجة."/>
 
                                         <CheckBox Content="حذف صفحات من كل ملف"
                                                   IsChecked="{Binding Settings.DeletePages}"
-                                                  IsEnabled="False" Foreground="{StaticResource MutedBrush}"/>
-                                        <TextBox Text="{Binding Settings.PagesToDelete}" Margin="0,4,0,0"
+                                                  ToolTip="الأرقام بتتحسب لكل ملف لوحده.&#10;يعني &quot;1&quot; بتشيل أول صفحة من كل ملف محمّل، مش أول صفحة في المستند المدموج."/>
+                                        <TextBox Text="{Binding Settings.PagesToDelete, UpdateSourceTrigger=PropertyChanged}"
+                                                 Margin="0,4,0,0"
                                                  IsEnabled="{Binding Settings.DeletePages}"
-                                                 ToolTip="مثال: 1,3,5-8"/>
+                                                 ToolTip="مثال: 1,3,5-8&#10;بيقبل الأرقام العربية والإنجليزية، والفاصلة العربية."/>
+                                        <TextBlock Text="{Binding PagesToDeleteSummary}" TextWrapping="Wrap"
+                                                   FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                                   Margin="0,4,0,0"
+                                                   Visibility="{Binding Settings.DeletePages,
+                                                                Converter={StaticResource BoolToVis}}"/>
 
-                                        <TextBlock Text="العناصر الرمادية لسه مش مبنية" FontSize="10"
+                                        <TextBlock Text="العنصر الرمادي (الضغط) لسه مقفول — شوف الشرح عليه" FontSize="10"
                                                    Foreground="#AAA" Margin="0,6,0,0"/>
                                     </StackPanel>
                                 </GroupBox>
@@ -275,12 +283,53 @@
                                                   SelectedValue="{Binding Settings.DuplexFlip}"
                                                   IsEnabled="{Binding Settings.Duplex}"/>
 
-                                        <TextBlock Text="الطابعة (اللي هيتطبع عليها فعلاً)" Style="{StaticResource FieldLabel}"/>
-                                        <ComboBox ItemsSource="{Binding Printers}"
-                                                  DisplayMemberPath="DisplayText" SelectedValuePath="Name"
-                                                  SelectedValue="{Binding Settings.PrinterName}"
-                                                  IsEnabled="{Binding SinglePrinterMode}"
-                                                  ToolTip="دي طابعة الجوب الحالي — الطباعة بتروح لهنا.&#10;بتبدأ على &quot;الطابعة الافتراضية للبرنامج&quot; من تاب الإعدادات العامة، وتقدر تغيّرها للجوب ده بس.&#10;في وضع أكتر من طابعة، الاختيار بيبقى من القايمة اللي تحت."/>
+                                        <!-- ═══ قايمة المكن ═══
+
+                                             كان هنا قايمة منسدلة (طابعة واحدة بس)، ومربع في آخر
+                                             القايمة بيفتح "وضع أكتر من طابعة"، وده بيخبّي قايمة
+                                             تعليم **في عمود تاني خالص**، ومربع تالت للتوزيع.
+                                             قرار واحد متقسّم على تلات أماكن.
+
+                                             جه بلاغ بالنص: "مش عارف اختار أكتر من واحدة" — من
+                                             مستخدم عنده سبع طابعات والميزة شغالة قدامه.
+
+                                             دلوقتي حاجة واحدة في مكان واحد: علّم على اللي عايزه.
+                                             واحدة = اطبع عليها، أكتر = وزّع عليهم. -->
+                                        <TextBlock Text="الطابعات (علّم على اللي هيتطبع عليها)"
+                                                   Style="{StaticResource FieldLabel}"/>
+
+                                        <Border BorderBrush="#D0D7E2" BorderThickness="1" CornerRadius="4"
+                                                Padding="2" Margin="0,2,0,0">
+                                            <ListBox ItemsSource="{Binding Printers}" MaxHeight="150"
+                                                     BorderThickness="0" Background="Transparent"
+                                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                                <ListBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <CheckBox IsChecked="{Binding IsSelected}"
+                                                                  Content="{Binding DisplayText}"
+                                                                  IsEnabled="{Binding IsEligible}"
+                                                                  Margin="2"/>
+                                                    </DataTemplate>
+                                                </ListBox.ItemTemplate>
+                                            </ListBox>
+                                        </Border>
+
+                                        <Button Content="تحديث الطابعات" Padding="8,3" FontSize="11"
+                                                HorizontalAlignment="Left" Margin="0,4,0,0"
+                                                Background="{StaticResource AccentBrush}"
+                                                Style="{StaticResource ActionButton}"
+                                                Command="{Binding RefreshPrintersCommand}"/>
+
+                                        <!-- السطر ده بيقول النتيجة مش التعليمات:
+                                             "٣ مكن مختارة — الشغل هيتقسّم عليهم بالصفحات: ٦٨٠ / ٦٨٠ / ٦٤٠" -->
+                                        <TextBlock Text="{Binding PrinterChoiceSummary}" TextWrapping="Wrap"
+                                                   FontSize="11" FontWeight="SemiBold" Margin="0,6,0,0"
+                                                   Foreground="{StaticResource AccentBrush}"/>
+
+                                        <CheckBox Content="كل مكنة تطبع العدد كامل (من غير تقسيم)"
+                                                  IsChecked="{Binding SameCountOnEveryPrinter}"
+                                                  Margin="0,6,0,0"
+                                                  ToolTip="الافتراضي إن الشغل بيتقسّم على المكن المعلّمة عشان الكل يخلص مع بعض.&#10;علّم هنا بس لو عايز كل مكنة تطلّع النسخ كاملة (نسخة لكل فرع مثلًا)."/>
 
                                         <TextBlock Text="اتجاه الصفحة" Style="{StaticResource FieldLabel}"/>
                                         <ComboBox ItemsSource="{Binding PageOrientations}"
@@ -292,17 +341,24 @@
                                                   SelectedItem="{Binding Settings.PaperSize}"/>
 
                                         <TextBlock Text="مقياس الصفحة (%)" Style="{StaticResource FieldLabel}"/>
-                                        <TextBox Text="{Binding Settings.ScalePercent}" IsEnabled="False"
-                                                 ToolTip="SumatraPDF مبيدعمش تحجيم بنسبة مئوية — لازم يتعمل على الـ PDF نفسه"/>
+                                        <TextBox Text="{Binding Settings.ScalePercent, UpdateSourceTrigger=PropertyChanged}"
+                                                 ToolTip="مقاس الورقة مابيتغيّرش — المحتوى بس هو اللي بيصغّر أو يكبر.&#10;٩٥٪ مثلًا بتبعد المحتوى عن الحواف لو الطابعة بتقص منها.&#10;من ١٠ لـ ٤٠٠."/>
+                                        <TextBlock Text="{Binding ScaleSummary}" TextWrapping="Wrap"
+                                                   FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                                   Margin="0,4,0,0"/>
 
                                         <TextBlock Text="إجمالي عدد النسخ" Style="{StaticResource FieldLabel}"/>
                                         <TextBox Text="{Binding Settings.TotalCopies}"/>
 
-                                        <CheckBox Content="طباعة الملفات على أكثر من طابعة"
-                                                  IsChecked="{Binding Settings.UseMultiplePrinters}"/>
-                                        <CheckBox Content="توزيع نسخ الملف الواحد على الطابعات"
-                                                  IsChecked="{Binding Settings.DistributeCopies}"
-                                                  IsEnabled="{Binding Settings.UseMultiplePrinters}"/>
+                                        <!-- تحذير فخّ الدمج: لو "دمج وحفظ الملفات" شغّال، الـ ٥٠
+                                             ملزمة بتبقى مستند واحد والتوزيع مالوش حاجة يقسّمها
+                                             غير النسخ. ده بيفضل لازم يتقال. -->
+                                        <TextBlock Text="{Binding DistributionSummary}" TextWrapping="Wrap"
+                                                   FontSize="11" Margin="0,4,0,0"
+                                                   Foreground="{Binding DistributionIsWarning,
+                                                                Converter={StaticResource WarningBrush}}"
+                                                   Visibility="{Binding DistributionIsWarning,
+                                                                Converter={StaticResource BoolToVis}}"/>
                                     </StackPanel>
                                 </GroupBox>
                             </StackPanel>
@@ -312,7 +368,7 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
-                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="0"/>
                                 <RowDefinition Height="140"/>
                             </Grid.RowDefinitions>
 
@@ -323,7 +379,7 @@
                                     Drop="FileDropArea_Drop"
                                     DragOver="FileDropArea_DragOver"
                                     MouseLeftButtonUp="FileDropArea_Click">
-                                <TextBlock Text="اسحب ملفات PDF هنا وأفلتها، أو اضغط لتحميل الملفات"
+                                <TextBlock Text="اسحب ملفات PDF أو صور هنا وأفلتها، أو اضغط لتحميل الملفات"
                                            HorizontalAlignment="Center" VerticalAlignment="Center"
                                            TextAlignment="Center" TextWrapping="Wrap"
                                            Foreground="{StaticResource AccentBrush}" FontWeight="SemiBold" Margin="10"/>
@@ -354,34 +410,25 @@
                                 </ListBox>
                             </GroupBox>
 
-                            <GroupBox Grid.Row="2" Header="اختر الطابعات" Margin="0,0,0,8"
-                                      Visibility="{Binding Settings.UseMultiplePrinters, Converter={StaticResource BoolToVis}}">
-                                <StackPanel>
-                                    <Button Content="تحديث الطابعات" Padding="8,4" FontSize="11"
-                                            HorizontalAlignment="Left" Margin="0,0,0,6"
-                                            Background="{StaticResource AccentBrush}"
-                                            Style="{StaticResource ActionButton}"
-                                            Command="{Binding RefreshPrintersCommand}"/>
-                                    <ListBox ItemsSource="{Binding Printers}" Height="110" BorderThickness="0">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate>
-                                                <CheckBox IsChecked="{Binding IsSelected}"
-                                                          Content="{Binding DisplayText}"
-                                                          IsEnabled="{Binding IsEligible}"/>
-                                            </DataTemplate>
-                                        </ListBox.ItemTemplate>
-                                    </ListBox>
-                                </StackPanel>
-                            </GroupBox>
-
-                            <GroupBox Grid.Row="3" Header="النتائج">
+<!-- صندوق "اختر الطابعات" كان هنا. اتشال: مالوش لازمة بعد ما
+                                 القايمة بقت جنب باقي خيارات الطباعة، ووجوده في عمود
+                                 تاني كان هو نفسه المشكلة. -->
+                                                        <GroupBox Grid.Row="3" Header="النتائج">
                                 <ListBox ItemsSource="{Binding Log}" BorderThickness="0" FontSize="11"
                                          ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
                             </GroupBox>
                         </Grid>
                     </Grid>
 
+                    <!--
+                        IsEnabled على صف الزراير ده كان ناقص.
+                        الـ Grid اللي فوق (Row 0) متربط بـ IsIdle، بس الزراير
+                        في صف تاني خالص — يعني كانت شغّالة طول الوقت، حتى
+                        والأوردر بيتبعت. ومن هنا طلع الورق مرتين في ١.٩.٧.
+                        الأوامر نفسها مقفولة من جوّه كمان؛ ده القفل التاني.
+                    -->
                     <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,10,0,0">
+                    <StackPanel Orientation="Horizontal" IsEnabled="{Binding IsIdle}">
                         <Button Content="تحميل الملفات" Background="#2FA84F"
                                 Style="{StaticResource ActionButton}" Margin="0,0,8,0"
                                 Click="LoadFilesButton_Click"/>
@@ -394,6 +441,13 @@
                         <Button Content="حذف الملفات وإرجاع الإعدادات" Background="#E0483E"
                                 Style="{StaticResource ActionButton}"
                                 Command="{Binding ResetCommand}"/>
+                    </StackPanel>
+
+                        <!-- بره قفل IsIdle عن قصد: ده الزرار الوحيد اللي
+                             لازم يشتغل والأوردر ماشي. -->
+                        <Button Content="إيقاف فوري" Background="#B3261E" Margin="12,0,0,0"
+                                Style="{StaticResource ActionButton}"
+                                Command="{Binding CancelCommand}"/>
                     </StackPanel>
                 </Grid>
             </TabItem>
@@ -517,6 +571,35 @@
 
                                     <TextBlock Text="مسح الملفات المؤقتة الأقدم من (يوم)" Style="{StaticResource FieldLabel}"/>
                                     <TextBox Text="{Binding App.TempFileRetentionDays}"/>
+
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Header="الاستقبال من بره البرنامج">
+                                <StackPanel>
+                                    <CheckBox Content="استقبال من طابعة PrintFlow"
+                                              IsChecked="{Binding App.ReceiveFromVirtualPrinter}"
+                                              ToolTip="بيخلّي البرنامج يلقط أي حاجة تتطبع على طابعة PrintFlow من أي برنامج تاني.&#10;الطابعة نفسها بتتسطّب مرة واحدة بـ install-printer.ps1 كمسؤول."/>
+
+                                    <TextBlock Text="مجلد مراقَب (أي ملف يتحط فيه بيتحمّل لوحده)"
+                                               Style="{StaticResource FieldLabel}"/>
+                                    <TextBox Text="{Binding App.HotFolder}" IsReadOnly="True"
+                                             ToolTip="لو حطيته على مجلد مشارك على الشبكة، كل أجهزة المطبعة تقدر ترمي فيه."/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                        <Button Content="اختيار مجلد" Padding="8,4" FontSize="11"
+                                                Click="ChooseHotFolder_Click"/>
+                                        <Button Content="إزالة" Padding="8,4" FontSize="11" Margin="6,0,0,0"
+                                                Click="ClearHotFolder_Click"/>
+                                    </StackPanel>
+
+                                    <CheckBox Content="طباعة الوارد تلقائيًا من غير ما أضغط"
+                                              IsChecked="{Binding App.PrintReceivedAutomatically}"
+                                              Margin="0,8,0,0"
+                                              ToolTip="مقفولة افتراضيًا عن قصد — ورق بيطلع من غير ما حد ضغط حاجة ده سلوك مخيف في مطبعة.&#10;شغّلها بس لما تكون متأكد من الإعدادات."/>
+
+                                    <TextBlock Text="{Binding ReceptionStatus}" TextWrapping="Wrap"
+                                               FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                               Margin="0,8,0,0"/>
 
                                     <Button Content="فتح مجلد سجل التشغيل" Background="#1B2A4A" FontSize="11"
                                             Padding="8,4" Margin="0,12,0,0" HorizontalAlignment="Right"
@@ -648,10 +731,19 @@
                                     <Slider Minimum="6" Maximum="200" TickFrequency="1" IsSnapToTickEnabled="True"
                                             Value="{Binding App.WatermarkFontSize}"/>
 
-                                    <TextBlock Text="{Binding App.WatermarkOpacityPercent, StringFormat='الشفافية: {0}%'}"
+                                    <!--
+                                        كان مكتوب "الشفافية" وده عكس معنى الرقم بالظبط:
+                                        Alpha = Percent × 255 ÷ 100، يعني ١٠٠ = لون صامت تمامًا
+                                        مش شفاف تمامًا. اللي كان بيرفع السلايدر لآخره فاكر إنه
+                                        بيفتّح العلامة، كان بيطلّعها صامتة فوق المحتوى.
+                                        الرقم زي ما هو (عشان الإعدادات المحفوظة ما تتغيّرش) —
+                                        الكلمة هي اللي اتصلحت.
+                                    -->
+                                    <TextBlock Text="{Binding App.WatermarkOpacityPercent, StringFormat='درجة الظهور: {0}%'}"
                                                Style="{StaticResource FieldLabel}"/>
                                     <Slider Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True"
-                                            Value="{Binding App.WatermarkOpacityPercent}"/>
+                                            Value="{Binding App.WatermarkOpacityPercent}"
+                                            ToolTip="١٠٠٪ = العلامة صامتة تمامًا وبتغطي المحتوى.&#10;للعلامة المائية العادية ٢٥-٤٠٪ بيكون أنسب."/>
 
                                     <TextBlock Text="{Binding App.WatermarkRotationDegrees, StringFormat='زاوية الدوران: {0}°'}"
                                                Style="{StaticResource FieldLabel}"/>
@@ -668,10 +760,19 @@
 
                     <!-- معاينة -->
                     <GroupBox Grid.Column="2" Header="معاينة">
-                        <Border Background="White" BorderBrush="{StaticResource BorderBrush2}" BorderThickness="1"
-                                MaxWidth="300" MaxHeight="420" Margin="6"
-                                HorizontalAlignment="Center" VerticalAlignment="Center"
-                                FlowDirection="LeftToRight">
+                        <!--
+                            الـ Viewbox بيصغّر المعاينة كلها لو العمود ضاق، من غير ما
+                            يكسر نسبة الورقة. من غيره كان لازم نسيب المقاس حر —
+                            وده اللي كان بيحصل: الصندوق كان بياخد مقاس المحتوى
+                            فيطلع مستطيل عرضي قصير، والمستخدم يشوف "أسفل شمال"
+                            في صندوق مش شكله ورقة أصلًا.
+                        -->
+                        <Viewbox Stretch="Uniform" StretchDirection="DownOnly" Margin="6"
+                                 HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <!-- نسبة A4 بالظبط: 595×842 → 300×424 -->
+                            <Border Background="White" BorderBrush="{StaticResource BorderBrush2}" BorderThickness="1"
+                                    Width="300" Height="424"
+                                    FlowDirection="LeftToRight">
                             <Grid ClipToBounds="True">
                                 <!-- خطوط تمثّل محتوى الصفحة -->
                                 <StackPanel Margin="24" VerticalAlignment="Top" Opacity="0.25">
@@ -715,8 +816,9 @@
                                                                  Converter={StaticResource PositionToAlign}, ConverterParameter=H}"
                                            VerticalAlignment="{Binding App.CustomTextPosition,
                                                                Converter={StaticResource PositionToAlign}, ConverterParameter=V}"/>
-                            </Grid>
-                        </Border>
+                                </Grid>
+                            </Border>
+                        </Viewbox>
                     </GroupBox>
                 </Grid>
             </TabItem>
@@ -732,8 +834,32 @@
             <ProgressBar Grid.Row="0" Height="3" IsIndeterminate="True" Margin="0,0,0,6"
                          Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"/>
 
-            <TextBlock Grid.Row="1" Text="{Binding StatusText}" VerticalAlignment="Center"
-                       Foreground="#555" TextTrimming="CharacterEllipsis"/>
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="{Binding StatusText}" VerticalAlignment="Center"
+                           Foreground="#555" TextTrimming="CharacterEllipsis"/>
+
+                <!--
+                    لمبة الاستقبال. موجودة عشان بلاغ حقيقي: المستخدم ظبّط
+                    الاستقبال وبعدين مالقاش حاجة تقوله هو شغّال ولا لأ —
+                    سطر الحالة الوحيد كان عايش في تاب الإعدادات العامة، واللي
+                    في المطبعة قاعد على التاب الرئيسي طول اليوم.
+
+                    بتبان بس لما يكون شغّال: علامة خضرا معناها "البرنامج
+                    سامع"، وغيابها معناه "مش سامع". أوضح من سطر بيتقال مرة
+                    في النتايج وبعدين يتلخبط وسط باقي السطور.
+                -->
+                <Border Grid.Column="1" Background="#E8F5E9" BorderBrush="#2FA84F" BorderThickness="1"
+                        CornerRadius="3" Padding="8,2" Margin="10,0,0,0"
+                        ToolTip="{Binding ReceptionStatus}"
+                        Visibility="{Binding ReceptionIsRunning, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="● الاستقبال شغّال" FontSize="11" Foreground="#1E7E34"/>
+                </Border>
+            </Grid>
         </Grid>
     </Grid>
 </Window>

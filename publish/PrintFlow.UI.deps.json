@@ -7,7 +7,7 @@
   "targets": {
     ".NETCoreApp,Version=v10.0": {},
     ".NETCoreApp,Version=v10.0/win-x64": {
-      "PrintFlow.UI/1.2.2": {
+      "PrintFlow.UI/1.9.8": {
         "dependencies": {
           "PrintFlow.Application": "1.0.0",
           "PrintFlow.Infrastructure": "1.0.0",
@@ -1113,7 +1113,7 @@
     }
   },
   "libraries": {
-    "PrintFlow.UI/1.2.2": {
+    "PrintFlow.UI/1.9.8": {
       "type": "project",
       "serviceable": false,
       "sha512": ""

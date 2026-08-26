@@ -38,7 +38,15 @@ public sealed record SlideRequest
 
     public BookletStart BookletStart { get; init; } = BookletStart.Right;
 
-    /// <summary>مفيش تجميع أصلًا — المستند بيعدّي زي ما هو من غير إعادة رسم.</summary>
+    /// <summary>
+    /// مفيش تجميع أصلًا — المستند بيعدّي زي ما هو من غير إعادة رسم.
+    ///
+    /// **لازم ده يبقى المصدر الوحيد للقرار ده في البرنامج كله.**
+    /// في 1.6.1 كان الـ ViewModel بيسأل <c>SlidesPerSheet &lt;= 1</c> بنفسه
+    /// قبل ما ينده المُجمّع — فوضع الكتيّب لوحده (وعدد الشرائح ١، وهو
+    /// الافتراضي) مكانش بيوصل للمُجمّع خالص وكان بيطبع عادي، والملخص في
+    /// الواجهة يقول إنه شغال. أي سؤال عن "نجمّع ولا لأ" بيعدّي من هنا.
+    /// </summary>
     public bool IsPassThrough => !Booklet && SlidesPerSheet <= 1;
 
     public static SlideRequest From(PrintSettings settings, string inputPath, string outputPath)

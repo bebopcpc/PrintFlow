@@ -165,6 +165,17 @@ public sealed record MergeRequest
     public OverlayTextStyle? CustomText { get; init; }
 
     /// <summary>
+    /// أرقام الصفحات المطلوب حذفها من **كل ملف داخل على حدة**، بصيغة "1,3,5-8".
+    /// null أو فاضي = مفيش حذف.
+    ///
+    /// "من كل ملف" مش تفصيلة — دي اللي مكتوبة على الواجهة نفسها. لو المستخدم
+    /// حمّل ٢٠ فاتورة وكل واحدة أول صفحة فيها غلاف، بيكتب "1" مرة واحدة وتتشال
+    /// من العشرين. لو الحذف كان على المستند المدموج كان هيشيل غلاف الفاتورة
+    /// الأولى بس، وده مش اللي طلبه.
+    /// </summary>
+    public string? PagesToDelete { get; init; }
+
+    /// <summary>
     /// بيجمّع خيارات الجوب (PrintSettings) مع تفضيلات البرنامج (AppSettings).
     /// الجوب بيقرر "نرقّم ولا لأ"، والتفضيلات بتقرر "الترقيم شكله إيه".
     /// </summary>
@@ -183,24 +194,51 @@ public sealed record MergeRequest
             OutputPath = outputPath,
             PageNumbers = print.NumberPagesPerFile ? PageNumberStyle.From(app) : null,
             Watermark = WatermarkStyle.From(app),
-            CustomText = OverlayTextStyle.From(app)
+            CustomText = OverlayTextStyle.From(app),
+            PagesToDelete = print.DeletePages ? print.PagesToDelete : null
         };
     }
 
     /// <summary>في حاجة أصلًا هتترسم فوق الورق؟</summary>
     public bool HasAnyOverlay => PageNumbers is not null || Watermark is not null || CustomText is not null;
 
+    /// <summary>في أي شغل أصلًا؟ لا إضافات ولا حذف صفحات.</summary>
+    public bool HasNothingToDo => !HasAnyOverlay && string.IsNullOrWhiteSpace(PagesToDelete);
+
     /// <summary>
     /// نفس الطلب بس بالإضافات المطلوبة بس — الباقي بيتشال.
     ///
     /// بتتستخدم في تقسيم الإضافات على مرحلتين حوالين تجميع الشرائح:
     /// اللي على الصفحة الأصلية بيتحط الأول، واللي على الورقة بيتحط بعدين.
+    ///
+    /// حذف الصفحات بيفضل مع المرحلة دي لأنها هي اللي بتقرا الملفات الأصلية.
     /// </summary>
     public MergeRequest KeepOnly(OverlayStage stage) => this with
     {
         PageNumbers = stage.PageNumbers ? PageNumbers : null,
         Watermark = stage.Watermark ? Watermark : null,
         CustomText = stage.CustomText ? CustomText : null
+    };
+
+    /// <summary>
+    /// طلب إضافات **بس** على ملف وسيط جاهز — من غير أي تعديل على الصفحات.
+    ///
+    /// موجودة عشان مرحلة "بعد تجميع الشرائح": الملف الداخل لها اتحذفت منه
+    /// الصفحات خلاص في المرحلة الأولى. لو الطلب اتبنى بـ <c>with</c> عادي
+    /// كان <see cref="PagesToDelete"/> هيفضل جوه وهيتنفّذ **تاني** — المرة دي
+    /// على أرقام الورق المجمّع، فيشيل ورق عشوائي.
+    ///
+    /// الدالة دي بتقفل الباب ده هيكليًا: مافيش طريقة تعمل بيها مرحلة إضافات
+    /// وتنسى تصفّر الحذف، لأن التصفير جوه الدالة نفسها.
+    /// </summary>
+    public MergeRequest OverlayOnly(OverlayStage stage, string inputFile, string outputPath) => this with
+    {
+        InputFiles = [inputFile],
+        OutputPath = outputPath,
+        PageNumbers = stage.PageNumbers ? PageNumbers : null,
+        Watermark = stage.Watermark ? Watermark : null,
+        CustomText = stage.CustomText ? CustomText : null,
+        PagesToDelete = null
     };
 }
 

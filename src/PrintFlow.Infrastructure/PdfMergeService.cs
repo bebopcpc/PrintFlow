@@ -70,13 +70,36 @@ public class PdfMergeService : IPdfMergeService
                 {
                     int start = output.PageCount;
 
-                    foreach (var page in input.Pages)
+                    // الحذف بيتحسب **لكل ملف على حدة** — "1" معناها أول صفحة في
+                    // كل ملف، مش أول صفحة في المستند المدموج. ده اللي مكتوب
+                    // على الواجهة: "حذف صفحات من كل ملف".
+                    var kept = PageRanges.Remaining(request.PagesToDelete, input.PageCount);
+
+                    foreach (int pageNumber in kept)
                     {
-                        output.AddPage(page);
+                        output.AddPage(input.Pages[pageNumber - 1]);
+                    }
+
+                    if (kept.Count == 0 && input.PageCount > 0)
+                    {
+                        // الملف اتشال بالكامل. مانوقفش الشغل — يمكن يكون ده
+                        // المقصود — بس لازم يتقال، عشان محدش يكتشف بعد الطباعة
+                        // إن ملف اختفى في صمت.
+                        warnings.Add($"الملف \"{Path.GetFileName(filePath)}\" اتشالت كل صفحاته");
                     }
 
                     fileRanges.Add(new PageRange(start, output.PageCount - start));
                 }
+            }
+
+            if (output.PageCount == 0)
+            {
+                // PdfSharp مابيحفظش مستند من غير صفحات. بنقول السبب بالعربي
+                // بدل ما نسيب استثناء تقني يطلع من جوه المكتبة.
+                return MergeResult.Failed(
+                    string.IsNullOrWhiteSpace(request.PagesToDelete)
+                        ? "الملفات المحمّلة مفيهاش أي صفحات."
+                        : $"حذف الصفحات \"{request.PagesToDelete}\" شال كل الصفحات — مفيش حاجة تتطبع. راجع الأرقام.");
             }
 
             ApplyOverlays(output, request, fileRanges, warnings);
@@ -451,6 +474,11 @@ public class PdfMergeService : IPdfMergeService
         if (request.CustomText is not null)
         {
             extras.Add("نص مخصص");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.PagesToDelete))
+        {
+            extras.Add($"حذف الصفحات ({request.PagesToDelete})");
         }
 
         return extras.Count == 0 ? "" : $" مع {string.Join(" و", extras)}";

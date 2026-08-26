@@ -20,11 +20,47 @@ public sealed class MainViewModel : ObservableObject
     private readonly IJobLog? _jobLog;
     private readonly IPdfInfoService? _pdfInfo;
     private readonly IPdfSlideComposer? _slideComposer;
+    private readonly IPdfPageScaler? _pageScaler;
+    private readonly IImageToPdfConverter? _imageConverter;
+    private readonly IIncomingJobWatcher? _incoming;
 
-    private List<string> _outputFiles = new();
+    /// <summary>
+    /// بيسأل المكن عن حالتها أثناء التوزيع. لو مفيش، بنفترض إن كله تمام —
+    /// يعني نفس سلوك النسخ القديمة بالظبط.
+    /// </summary>
+    private readonly IPrinterHealth _printerHealth;
 
-    /// <summary>عدد صفحات المستند الناتج — بيتستخدم بس في حساب مهلة انتظار الطباعة.</summary>
-    private int _outputPageCount;
+    /// <summary>
+    /// ثريد الواجهة، بيتلقط لحظة بناء الـ ViewModel.
+    ///
+    /// **ليه ده موجود:** المراقب بيشتغل على ثريد خلفي، والأحداث بتاعته
+    /// بتتنده من هناك. و<c>ObservableCollection</c> المربوطة بالواجهة
+    /// بترمي استثناء لو حد عدّلها من ثريد تاني. النتيجة كانت إن أول جوب
+    /// يوصل يرمي، والاستثناء يقتل حلقة المراقبة كلها في صمت — فالبرنامج
+    /// يفضل مفتوح وشكله سليم ومش شايف أي جوب بعد كده.
+    ///
+    /// <c>SynchronizationContext</c> من الـ BCL مش من WPF، فالطبقة دي
+    /// بتفضل من غير أي اعتماد على مكتبة واجهة.
+    /// </summary>
+    private readonly SynchronizationContext? _uiThread = SynchronizationContext.Current;
+
+    /// <summary>
+    /// المستندات الجاهزة للطباعة، كل واحد بعدد صفحاته.
+    ///
+    /// كانت قايمة مسارات + رقم واحد لإجمالي الصفحات. الرقم الواحد ده مكانش
+    /// بيكفي لحاجتين: مهلة الانتظار المفروض تتحسب لكل مستند على حدة، والأهم
+    /// إن توزيع الشغل على المكن محتاج يعرف تقل كل مستند لوحده.
+    /// </summary>
+    private List<PrintableDocument> _output = new();
+
+    /// <summary>إجمالي صفحات كل المستندات الناتجة.</summary>
+    private int _outputPageCount => _output.Sum(d => d.Pages);
+
+    /// <summary>
+    /// مجلد الصور المحوّلة جوه تيمب البرنامج. ثابت عن قصد: كل صور نفس
+    /// التحميل بتقع جنب بعض، والتنضيف بيعرف يلاقيها.
+    /// </summary>
+    private const string ConvertedFolderName = "converted";
 
     public MainViewModel(
         IPrinterRepository printerRepository,
@@ -36,11 +72,19 @@ public sealed class MainViewModel : ObservableObject
         IJobLog? jobLog = null,
         IPdfInfoService? pdfInfo = null,
         IPdfSlideComposer? slideComposer = null,
-        string appVersion = "")
+        IPdfPageScaler? pageScaler = null,
+        IImageToPdfConverter? imageConverter = null,
+        IIncomingJobWatcher? incomingWatcher = null,
+        string appVersion = "",
+        IPrinterHealth? printerHealth = null)
     {
+        _printerHealth = printerHealth ?? new AlwaysFinePrinterHealth();
         _jobLog = jobLog;
         _pdfInfo = pdfInfo;
         _slideComposer = slideComposer;
+        _pageScaler = pageScaler;
+        _imageConverter = imageConverter;
+        _incoming = incomingWatcher;
         AppVersion = appVersion;
 
         _printerRepository = printerRepository ?? throw new ArgumentNullException(nameof(printerRepository));
@@ -70,9 +114,30 @@ public sealed class MainViewModel : ObservableObject
         }
 
         RefreshPrintersCommand = new AsyncRelayCommand(RefreshPrintersAsync);
-        ProcessCommand = new AsyncRelayCommand(ProcessAsync, () => Files.Count > 0);
-        PrintCommand = new AsyncRelayCommand(PrintAsync, () => _outputFiles.Count > 0);
-        ResetCommand = new RelayCommand(Reset);
+
+        // كل الزراير دي بتسأل عن IsPrinting كمان، مش بس عن نفسها.
+        //
+        // الحارس اللي جوه AsyncRelayCommand بيعرف الأمر بتاعه هو بس. لما
+        // المعالجة بتنده الطباعة لوحدها، PrintCommand مابيعرفش إن فيه
+        // طباعة ماشية — فيفضل مفتوح. ومن هنا طلع الأوردر مرتين في ١.٩.٧.
+        //
+        // Reset كمان: كان من غير أي شرط خالص، فينفع يمسح _output والأوردر
+        // نصه بره.
+        ProcessCommand = new AsyncRelayCommand(ProcessAsync, () => Files.Count > 0 && !IsPrinting);
+        // !IsBusy مش زيادة: IsPrinting بتبقى false طول مرحلة **المعالجة**،
+        // والمعالجة بتنتهي بطباعة تلقائية. من غيرها الزرار بيفضل مفتوح
+        // طول الدمج — وهي نفس نافذة ١.٩.٧، بس أبكر بخطوة.
+        // Files.Count كمان: دلوقتي «طباعة الآن» بتشتغل على الملف الخام
+        // من غير ما تعدّي على المعالجة، فالزرار لازم يفتح أول ما ملف يتحمّل.
+        PrintCommand = new AsyncRelayCommand(
+            PrintAsync,
+            () => (_output.Count > 0 || Files.Count > 0) && !IsBusy && !IsPrinting);
+
+        ResetCommand = new RelayCommand(Reset, () => !IsBusy && !IsPrinting);
+
+        // ده الزرار الوحيد اللي **لازم** يشتغل والشغل ماشي، فشرطه معكوس.
+        CancelCommand = new RelayCommand(CancelPrinting, () => IsBusy || IsPrinting);
+
         RemoveFileCommand = new RelayCommand<PdfFileItem>(RemoveFile);
 
         AddPresetCommand = new RelayCommand(AddPreset, () => !string.IsNullOrWhiteSpace(NewPresetName));
@@ -84,8 +149,12 @@ public sealed class MainViewModel : ObservableObject
         Files.CollectionChanged += (_, _) =>
         {
             ProcessCommand.RaiseCanExecuteChanged();
+            PrintCommand.RaiseCanExecuteChanged();
             OnPropertyChanged(nameof(FilesCountText));
             RefreshBookletSummary();
+            RefreshDeleteSummary();
+            RefreshDistributionSummary();
+            RefreshPrinterChoiceSummary();
         };
 
         Settings.PropertyChanged += (_, e) =>
@@ -93,6 +162,7 @@ public sealed class MainViewModel : ObservableObject
             if (e.PropertyName == nameof(PrintSettings.UseMultiplePrinters))
             {
                 OnPropertyChanged(nameof(SinglePrinterMode));
+                RefreshPrinterChoiceSummary();
             }
 
             // أي إعداد بيغيّر شكل الورقة لازم يحدّث المعاينة على طول
@@ -110,7 +180,46 @@ public sealed class MainViewModel : ObservableObject
             {
                 RefreshBookletSummary();
             }
+
+            if (e.PropertyName is nameof(PrintSettings.DeletePages)
+                or nameof(PrintSettings.PagesToDelete))
+            {
+                RefreshDeleteSummary();
+            }
+
+            if (e.PropertyName == nameof(PrintSettings.ScalePercent))
+            {
+                ScaleSummary = PageScaling.Describe(Settings.ScalePercent);
+            }
+
+            if (e.PropertyName is nameof(PrintSettings.UseMultiplePrinters)
+                or nameof(PrintSettings.DistributeCopies)
+                or nameof(PrintSettings.MergeFiles)
+                or nameof(PrintSettings.TotalCopies))
+            {
+                RefreshDistributionSummary();
+                RefreshPrinterChoiceSummary();
+            }
+
+            if (e.PropertyName == nameof(PrintSettings.DistributeCopies))
+            {
+                OnPropertyChanged(nameof(SameCountOnEveryPrinter));
+            }
+
+            // إعداد مسبق أو تاب الإعدادات العامة غيّر الطابعة → القايمة
+            // لازم تعلّم عليها، وإلا المستخدم بيشوف اسم واحد والتعليم على
+            // واحد تاني
+            if (e.PropertyName == nameof(PrintSettings.PrinterName))
+            {
+                ApplyPrinterNameToTicks();
+            }
         };
+
+        if (_incoming is not null)
+        {
+            _incoming.JobArrived += file => OnUiThread(() => OnJobArrived(file));
+            _incoming.Reported += line => OnUiThread(() => Log.Add(line));
+        }
 
         RefreshSlidePreview();
 
@@ -121,6 +230,18 @@ public sealed class MainViewModel : ObservableObject
             {
                 SortFiles();
             }
+
+            // تشغيل/إيقاف الاستقبال لحظة ما المستخدم يغيّر الإعداد،
+            // من غير ما يحتاج يقفل البرنامج ويفتحه
+            if (e.PropertyName is nameof(AppSettings.ReceiveFromVirtualPrinter)
+                or nameof(AppSettings.HotFolder))
+            {
+                ApplyReceptionSettings();
+            }
+
+            // الحفظ بقى لحظي (مؤجّل شوية) بدل ما يكون عند الإغلاق بس.
+            // الشرح الكامل في ScheduleAppSettingsSave.
+            ScheduleAppSettingsSave();
         };
     }
 
@@ -155,11 +276,22 @@ public sealed class MainViewModel : ObservableObject
             if (SetProperty(ref _isBusy, value))
             {
                 OnPropertyChanged(nameof(IsIdle));
+
+                // الزراير بتسأل عن الحالة دي، فلازم تتبلّغ إنها اتغيّرت.
+                // من غير السطر ده، ResetCommand بيفضل مفتوح طول الشغل
+                // لأن WPF مش بيعيد السؤال من نفسه على الأوامر دي.
+                RefreshCommandStates();
             }
         }
     }
 
-    public bool IsIdle => !IsBusy;
+    /// <summary>
+    /// «مفيش شغل ماشي». الواجهة كلها متربطة بيها.
+    ///
+    /// IsPrinting جزء منها عن قصد: كانت !IsBusy بس، وفيه لحظة IsBusy
+    /// بترجع false والأوردر لسه بيتبعت. الواجهة كانت بتفتح في اللحظة دي.
+    /// </summary>
+    public bool IsIdle => !IsBusy && !IsPrinting;
 
     private int _printerCount;
     public int PrinterCount
@@ -184,8 +316,168 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>قايمة اختيار الطابعة الواحدة بتتقفل لما المستخدم يفعّل وضع "أكتر من طابعة".</summary>
     public bool SinglePrinterMode => !Settings.UseMultiplePrinters;
 
+    /// <summary>
+    /// سطر تحت قايمة المكن بيقول اللي هيحصل لما تضغط طباعة.
+    ///
+    /// ═══ ليه ده موجود ═══
+    ///
+    /// النسخة اللي فاتت كانت بتحط هنا سطر بيقول للمستخدم "علّم على مربع
+    /// كذا تحت عشان توزّع". يعني الواجهة كانت بتشرح لنفسها. لما الشرح
+    /// بيبقى لازم، ده مش نقص في الشرح — ده نقص في التصميم.
+    ///
+    /// دلوقتي قايمة المكن نفسها هي المفتاح، والسطر ده بقى بيقول **النتيجة**
+    /// مش التعليمات: "٣ مكن مختارة — ٥٠ نسخة هتتقسّم ١٧ / ١٧ / ١٦".
+    /// المستخدم بيشوف القسمة قبل ما الورق يطلع، مش بعده.
+    /// </summary>
+    public string PrinterChoiceSummary
+    {
+        get
+        {
+            var ticked = Printers.Where(p => p.IsSelected && p.IsEligible).ToList();
+
+            if (ticked.Count == 0)
+            {
+                var fallback = Printers.FirstOrDefault(p => p.Name == Settings.PrinterName)
+                               ?? Printers.FirstOrDefault(p => p.IsDefault);
+
+                return fallback is null
+                    ? "مفيش طابعة متاحة."
+                    : $"مفيش مكنة معلّمة — هيتطبع على \"{fallback.Name}\" لوحدها.";
+            }
+
+            if (ticked.Count == 1)
+            {
+                return $"مكنة واحدة: \"{ticked[0].Name}\" هتطبع الـ {Settings.TotalCopies} نسخة كلها.";
+            }
+
+            if (!Settings.DistributeCopies)
+            {
+                return $"{ticked.Count} مكن مختارة — كل واحدة هتطبع الـ {Settings.TotalCopies} نسخة كاملة " +
+                       $"(المجموع {ticked.Count * Settings.TotalCopies} نسخة).";
+            }
+
+            // بنعرض القسمة الحقيقية اللي الموزّع هيعملها، مش تقدير.
+            // نفس الدالة اللي بتشتغل وقت الطباعة بالظبط — فاللي المستخدم
+            // بيشوفه هنا هو اللي هيطلع على الورق.
+            var documents = _output.Count > 0
+                ? _output
+                : Files.Select(f => new PrintableDocument(f.FullPath, f.PageCount ?? 0)).ToList();
+
+            if (documents.Count == 0)
+            {
+                return $"{ticked.Count} مكن مختارة — الشغل هيتقسّم عليهم. حمّل ملفات عشان نحسبلك القسمة.";
+            }
+
+            var plan = WorkloadBalancer.Balance(
+                documents, Settings.TotalCopies, ticked.Select(p => p.Name).ToList());
+
+            string split = string.Join(" / ", plan.Printers.Select(p => p.Pages));
+
+            return $"{ticked.Count} مكن مختارة — الشغل هيتقسّم عليهم بالصفحات: {split} " +
+                   $"(الفرق بين أتقل وأخف مكنة {plan.Spread} صفحة).";
+        }
+    }
+
+    /// <summary>
+    /// مربع "كل مكنة تطبع العدد كامل".
+    ///
+    /// دي عكس التوزيع، ومقلوبة عن قصد: التوزيع هو الوضع الطبيعي اللي
+    /// البرنامج اتعمل عشانه، فمينفعش يبقى محتاج علامة. اللي محتاج علامة
+    /// هو الحالة النادرة — نسخة كاملة لكل فرع مثلًا.
+    /// </summary>
+    public bool SameCountOnEveryPrinter
+    {
+        get => !Settings.DistributeCopies;
+        set
+        {
+            if (Settings.DistributeCopies == !value)
+            {
+                return;
+            }
+
+            Settings.DistributeCopies = !value;
+            OnPropertyChanged();
+            RefreshPrinterChoiceSummary();
+        }
+    }
+
+    /// <summary>بيحدّث السطر بعد أي تغيير في التعليم أو عدد النسخ أو الملفات.</summary>
+    private void RefreshPrinterChoiceSummary() => OnPropertyChanged(nameof(PrinterChoiceSummary));
+
+    /// <summary>
+    /// بيخلّي حالة "مكنة واحدة معلّمة" و<see cref="PrintSettings.PrinterName"/>
+    /// متطابقين في الاتجاهين.
+    ///
+    /// لازم عشان الاسم ده هو اللي بيتحفظ في الإعدادات المسبقة وبيتقرا من
+    /// تاب الإعدادات العامة. من غيره، المستخدم يطبّق إعداد مسبق فيه طابعة
+    /// ويلاقي القايمة معلّمة على حاجة تانية خالص.
+    /// </summary>
+    /// <summary>
+    /// الاتجاه العكسي: الاسم اتغيّر من بره (إعداد مسبق / الإعدادات العامة)
+    /// → نعلّم عليه في القايمة.
+    ///
+    /// بنعمل ده بس لما التعليم يكون **مكنة واحدة أو ولا حاجة**. لو
+    /// المستخدم معلّم على تلاتة وبيوزّع، مش هنمسح اختياره عشان اسم
+    /// اتحفظ في إعداد قديم.
+    /// </summary>
+    private void ApplyPrinterNameToTicks()
+    {
+        if (_syncingPrinterName || Printers.Count(p => p.IsSelected) > 1)
+        {
+            return;
+        }
+
+        var target = Printers.FirstOrDefault(p => p.Name == Settings.PrinterName);
+
+        if (target is null)
+        {
+            return;
+        }
+
+        _syncingPrinterName = true;
+
+        try
+        {
+            foreach (var printer in Printers)
+            {
+                printer.IsSelected = ReferenceEquals(printer, target);
+            }
+        }
+        finally
+        {
+            _syncingPrinterName = false;
+        }
+    }
+
+    /// <summary>بيمنع المزامنة إنها تنده نفسها ذهاب وعودة.</summary>
+    private bool _syncingPrinterName;
+
+    private void SyncSinglePrinterName()
+    {
+        if (_syncingPrinterName)
+        {
+            return;
+        }
+
+        var ticked = Printers.Where(p => p.IsSelected).ToList();
+
+        if (ticked.Count == 1 && Settings.PrinterName != ticked[0].Name)
+        {
+            _syncingPrinterName = true;
+
+            try
+            {
+                Settings.PrinterName = ticked[0].Name;
+            }
+            finally
+            {
+                _syncingPrinterName = false;
+            }
+        }
+    }
+
     /// <summary>كام مستند جاهز للطباعة بعد المعالجة. في وضع الدمج بيبقى ١.</summary>
-    public int OutputFileCount => _outputFiles.Count;
+    public int OutputFileCount => _output.Count;
 
     // ══════════ معاينة الشرائح ══════════
 
@@ -221,6 +513,117 @@ public sealed class MainViewModel : ObservableObject
     {
         get => _bookletSummary;
         private set => SetProperty(ref _bookletSummary, value);
+    }
+
+    private string _pagesToDeleteSummary = "";
+    /// <summary>
+    /// وصف اللي هيتشال، بيتحدّث مع كل حرف بيتكتب.
+    ///
+    /// أهم حالة فيه: "مفيش أرقام مفهومة". من غيره، حد بيكتب "الأولى" بالكلام
+    /// كان هيضغط معالجة ويلاقي مفيش حاجة اتشالت ومايعرفش ليه.
+    /// </summary>
+    public string PagesToDeleteSummary
+    {
+        get => _pagesToDeleteSummary;
+        private set => SetProperty(ref _pagesToDeleteSummary, value);
+    }
+
+    private string _scaleSummary = PageScaling.Describe(100);
+    /// <summary>وصف المقياس بالكلام — بيفرّق بين "هامش أبيض" و"هيتقص".</summary>
+    public string ScaleSummary
+    {
+        get => _scaleSummary;
+        private set => SetProperty(ref _scaleSummary, value);
+    }
+
+    private string _distributionSummary = "";
+    /// <summary>وصف اللي هيتوزّع على المكن، قبل ما الشغل يبدأ.</summary>
+    public string DistributionSummary
+    {
+        get => _distributionSummary;
+        private set => SetProperty(ref _distributionSummary, value);
+    }
+
+    private bool _distributionIsWarning;
+    /// <summary>الوصف ده تحذير ولا معلومة؟ الواجهة بتلوّنه على أساسها.</summary>
+    public bool DistributionIsWarning
+    {
+        get => _distributionIsWarning;
+        private set => SetProperty(ref _distributionIsWarning, value);
+    }
+
+    /// <summary>
+    /// بيقول للمستخدم الشغل هيتقسّم إزاي **قبل** ما يضغط.
+    ///
+    /// أهم حالة فيه هي فخّ الدمج: لو "دمج وحفظ الملفات" شغّال، الـ ٥٠ ملزمة
+    /// بتبقى مستند واحد، والتوزيع مالوش حاجة يقسّمها غير النسخ. اللي طالب
+    /// "وزّع الـ ٥٠ ملزمة على الـ ١٠ مكن" هيلاقي التقسيم مش زي ما توقّع
+    /// ومش هيعرف ليه. التحذير ده بيقفل الفجوة دي قبل ما الورق يطلع.
+    /// </summary>
+    public void RefreshDistributionSummary()
+    {
+        // البوابة كانت بتسأل عن مفتاح "أكتر من طابعة". المفتاح ده اتشال من
+        // الواجهة في ١.٩.٦ (بقى التعليم هو المفتاح)، فلو سبناها زي ما هي
+        // كان **تحذير فخّ الدمج مايظهرش تاني أبدًا** — وهو أهم سطر هنا.
+        if (!Settings.DistributeCopies)
+        {
+            DistributionSummary = "";
+            DistributionIsWarning = false;
+            return;
+        }
+
+        if (Settings.MergeFiles && Files.Count > 1)
+        {
+            DistributionIsWarning = true;
+            DistributionSummary =
+                $"تنبيه: \"دمج وحفظ الملفات\" شغّال، فالـ {Files.Count} ملف هيبقوا مستند واحد " +
+                "والتوزيع هيقسّم نسخه بس. اقفل الدمج عشان الملازم تتوزّع على المكن.";
+            return;
+        }
+
+        DistributionIsWarning = false;
+
+        if (Files.Count == 0)
+        {
+            DistributionSummary = "حمّل ملفات عشان نحسبلك التقسيم.";
+            return;
+        }
+
+        int machines = Printers.Count(p => p.IsSelected && p.IsEligible);
+
+        if (machines == 0)
+        {
+            DistributionSummary = "اختار المكن من القايمة.";
+            return;
+        }
+
+        // نفس قاعدة الموازن: صفحة على الأقل حتى لو مقدرناش نعد الصفحات
+        int pages = Files.Sum(f => Math.Max(1, f.PageCount ?? 0)) * Settings.TotalCopies;
+
+        DistributionSummary =
+            $"{Files.Count} ملف × {Settings.TotalCopies} نسخة ≈ {pages} صفحة، " +
+            $"هتتقسّم على {machines} مكنة (حوالي {pages / machines} صفحة لكل واحدة).";
+    }
+
+    /// <summary>
+    /// بيحسب الوصف من **أقل عدد صفحات** في الملفات المحمّلة.
+    ///
+    /// ليه الأقل مش المتوسط ولا الإجمالي: الحذف بيتنفّذ على كل ملف لوحده،
+    /// فأول ملف هيتأثر بمدى كبير هو أقصر ملف. لو حسبنا على الأكبر، التحذير
+    /// "ده هيشيل كل صفحات الملف" مكانش هيظهر غير لما يبقى فات الأوان.
+    /// </summary>
+    private void RefreshDeleteSummary()
+    {
+        if (!Settings.DeletePages)
+        {
+            PagesToDeleteSummary = "";
+            return;
+        }
+
+        var counts = Files.Select(f => f.PageCount ?? 0).Where(c => c > 0).ToList();
+        int smallest = counts.Count > 0 ? counts.Min() : 0;
+
+        PagesToDeleteSummary = PageRanges.Describe(Settings.PagesToDelete, smallest);
     }
 
     /// <summary>
@@ -442,6 +845,7 @@ public sealed class MainViewModel : ObservableObject
     public AsyncRelayCommand ProcessCommand { get; }
     public AsyncRelayCommand PrintCommand { get; }
     public RelayCommand ResetCommand { get; }
+    public RelayCommand CancelCommand { get; }
     public RelayCommand<PdfFileItem> RemoveFileCommand { get; }
     public RelayCommand AddPresetCommand { get; }
     public RelayCommand UpdatePresetCommand { get; }
@@ -561,12 +965,147 @@ public sealed class MainViewModel : ObservableObject
         StatusText = $"اتطبّق الإعداد المسبق \"{preset.Name}\".";
     }
 
-    private void PersistPresets() => _presetStore?.SaveAll(Presets);
+    /// <summary>
+    /// بيحفظ الإعدادات المسبقة. زي حفظ التفضيلات بالظبط: **مابيرميش**.
+    ///
+    /// كان بينده المخزن على طول من غير أي حماية. يعني لو الكتابة فشلت
+    /// لأي سبب — مضاد فيروسات ماسك الملف، القرص مليان، المجلد للقراءة بس —
+    /// الاستثناء كان بيطلع من زرار "إضافة إعداد مسبق" ويوقّع البرنامج
+    /// وسط الشغل. حفظ Preset مايستاهلش ده.
+    /// </summary>
+    private void PersistPresets()
+    {
+        try
+        {
+            _presetStore?.SaveAll(Presets);
+        }
+        catch (Exception exception)
+        {
+            string line = $"[تنبيه] مقدرناش نحفظ الإعدادات المسبقة: {exception.Message}";
+            Log.Add(line);
+            _jobLog?.Info(line);
+        }
+    }
 
     // ══════════ الإعدادات العامة ══════════
 
-    /// <summary>بيحفظ تفضيلات البرنامج. الواجهة بتناديها عند الإغلاق.</summary>
-    public void SaveAppSettings() => _settingsStore?.Save(App);
+    /// <summary>
+    /// كام مللي نستنى بعد آخر تغيير قبل ما نكتب على القرص.
+    ///
+    /// موجودة كخاصية عشان التستات تخليها صفر وتشتغل متزامنة من غير انتظار.
+    /// </summary>
+    public int SaveDelayMilliseconds { get; set; } = 800;
+
+    /// <summary>
+    /// الحفظ المؤجّل الشغّال دلوقتي — التستات بتستناه.
+    ///
+    /// لما يخلّص، تبقى الكتابة اتعملت **مرة واحدة** لكل موجة تغييرات،
+    /// مش مرة لكل تغيير. ده مش تفصيلة تجميل: التست بيعتمد عليه، وأول
+    /// نسخة من الكود ده كانت بتعمل Task لكل تغيير — فالتست اللي المفروض
+    /// يحرس على التجميع كان بيعدّي حتى وأنا شايل التجميع، لأنه كان
+    /// بيستنى آخر Task بس والباقي لسه في الطابور.
+    /// </summary>
+    public Task PendingSave { get; private set; } = Task.CompletedTask;
+
+    private readonly object _saveGate = new();
+    private bool _saveDirty;
+    private bool _saveLoopLive;
+    private Task? _saveLoop;
+
+    /// <summary>
+    /// بيحفظ تفضيلات البرنامج **حالًا**.
+    ///
+    /// مابيرميش استثناء أبدًا: المبدأ في المشروع ده إن مطبعة ماتقفش عشان
+    /// ملف إعدادات. لو القرص مليان أو الصلاحيات ناقصة، بنكتب سطر في اللوج
+    /// ونكمّل — البديل إن البرنامج يقع وهو بيتقفل، والمستخدم ماياخدش باله
+    /// إن إعداداته ضاعت أصلًا.
+    /// </summary>
+    public void SaveAppSettings()
+    {
+        try
+        {
+            _settingsStore?.Save(App);
+        }
+        catch (Exception exception)
+        {
+            _jobLog?.Info($"مقدرناش نحفظ الإعدادات العامة: {exception.Message}");
+        }
+    }
+
+    /// <summary>
+    /// بيحجز حفظ بعد شوية سكوت، وبيلغي الحجز القديم لو التغيير لسه مستمر.
+    ///
+    /// ═══ ليه ده موجود ═══
+    ///
+    /// الإعدادات العامة كانت بتتحفظ في مكان **واحد** بس: لحظة إغلاق النافذة.
+    /// يعني أي حاجة تمنع الإغلاق النضيف — الكهربا تقطع، الجهاز يعمل ريستارت،
+    /// حد يقفل البرنامج من Task Manager، البرنامج يقع — بتضيّع كل حاجة
+    /// المستخدم غيّرها في الجلسة دي.
+    ///
+    /// وأخطر واحدة فيهم الاستقبال: بتعلّم على المربع، يشتغل قدامك على طول،
+    /// وتفتكره اتحفظ — وتلاقيه مقفول تاني بعد ريستارت من غير ما تعرف ليه.
+    /// (ده بالظبط اللي اتشاف في التجربة، واتنسب لزرار التصفير الأحمر —
+    /// والزرار ده أصلًا مابيلمسش الإعدادات العامة، التست
+    /// <c>Reset_Never_Touches_The_General_Settings</c> حارس على كده.)
+    ///
+    /// ليه بنأجّل بدل ما نكتب على طول؟ سحب مؤشر "درجة الظهور" بيبعت عشرات
+    /// الإشعارات في الثانية، والكتابة الفورية معناها عشرات الملفات المؤقتة
+    /// والاستبدالات — على هارد بطيء في مطبعة ده بيلجلج الواجهة.
+    ///
+    /// الشكل: **حلقة واحدة وعلَم "فيه تغيير"**، مش Task لكل تغيير. أي
+    /// تغيير بيرفع العلم؛ الحلقة بتنزّل العلم وتستنى؛ لو العلم اترفع تاني
+    /// وهي مستنية بتستنى كمان دورة. أول ما تعدّي دورة كاملة في سكوت
+    /// بتكتب مرة واحدة وتخلص.
+    ///
+    /// ده مش بس أبسط من الشكل الأول — ده اللي بيخلي
+    /// <c>PendingSave</c> يعني حاجة: هو الحلقة نفسها، فلما يخلّص تبقى
+    /// الكتابة اتعملت فعلًا ومفيش حاجة تانية في الطابور.
+    /// </summary>
+    private void ScheduleAppSettingsSave()
+    {
+        lock (_saveGate)
+        {
+            _saveDirty = true;
+
+            if (_saveLoopLive)
+            {
+                return;
+            }
+
+            _saveLoopLive = true;
+            _saveLoop = SaveWhenQuietAsync();
+            PendingSave = _saveLoop;
+        }
+    }
+
+    private async Task SaveWhenQuietAsync()
+    {
+        while (true)
+        {
+            if (SaveDelayMilliseconds > 0)
+            {
+                await Task.Delay(SaveDelayMilliseconds);
+            }
+
+            lock (_saveGate)
+            {
+                // جه تغيير تاني وإحنا مستنيين؟ نستنى دورة كمان
+                if (_saveDirty)
+                {
+                    _saveDirty = false;
+                    continue;
+                }
+
+                // سكوت. بننزّل العلم **وإحنا ماسكين القفل** وبنكتب جواه:
+                // كده أي تغيير بيجي في نفس اللحظة يستنى، يلاقي الحلقة
+                // خلصت، ويبدأ واحدة جديدة — بدل ما يضيع في الشق ما بين
+                // "خلصنا" و"كتبنا".
+                _saveLoopLive = false;
+                SaveAppSettings();
+                return;
+            }
+        }
+    }
 
     /// <summary>
     /// بترجّع كل تفضيلات البرنامج لقيمتها الافتراضية.
@@ -578,6 +1117,12 @@ public sealed class MainViewModel : ObservableObject
     ///
     /// بنعدّي على نفس الكائن (App) مش بنستبدله، لأن كل الـ Bindings مربوطة عليه
     /// — والـ setters هي اللي بتبعت PropertyChanged لكل خاصية.
+    ///
+    /// **استثناء واحد مقصود:** الخصايص المعلّمة بـ
+    /// <see cref="ConnectionSettingAttribute"/> (الاستقبال والمجلد المراقَب)
+    /// بتفضل زي ما هي. السبب مشروح في السمة نفسها: رجوع لون الترقيم
+    /// للافتراضي بيبان في نص ثانية، وقفل الاستقبال مابيبانش خالص —
+    /// الشغل الجاي من بره بيروح في الهوا والبرنامج شكله سليم.
     /// </summary>
     private void RestoreDefaultAppSettings()
     {
@@ -585,14 +1130,24 @@ public sealed class MainViewModel : ObservableObject
 
         foreach (var property in typeof(AppSettings).GetProperties())
         {
-            if (property.CanRead && property.CanWrite && property.GetIndexParameters().Length == 0)
+            if (!property.CanRead || !property.CanWrite || property.GetIndexParameters().Length != 0)
             {
-                property.SetValue(App, property.GetValue(defaults));
+                continue;
             }
+
+            if (property.IsDefined(typeof(ConnectionSettingAttribute), inherit: true))
+            {
+                continue;
+            }
+
+            property.SetValue(App, property.GetValue(defaults));
         }
 
         SaveAppSettings();
-        StatusText = "اترجعت الإعدادات العامة للوضع الافتراضي.";
+
+        // بنقول بالنص إيه اللي ماتغيرش — الصمت هنا هو اللي بيخلي الناس
+        // تفتكر إن الزرار قفل الاستقبال
+        StatusText = "اترجعت الإعدادات العامة للوضع الافتراضي. إعدادات الاستقبال ماتغيرتش.";
     }
 
     // ══════════ الملفات ══════════
@@ -601,32 +1156,73 @@ public sealed class MainViewModel : ObservableObject
     public int AddFiles(IEnumerable<string> paths)
     {
         int added = 0;
+        int converted = 0;
+        var office = new List<string>();
+        var unsupportedImages = new List<string>();
+        var failed = new List<string>();
 
         foreach (var path in paths)
         {
-            if (!path.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (Files.Any(f => string.Equals(f.FullPath, path, StringComparison.OrdinalIgnoreCase)))
-            {
-                continue;
-            }
-
             if (!File.Exists(path))
             {
                 continue;
             }
 
-            var info = new FileInfo(path);
-            Files.Add(new PdfFileItem(path, info.Length, info.LastWriteTimeUtc));
+            var kind = SupportedInput.KindOf(path);
+
+            if (kind == InputKind.Office)
+            {
+                // بيتقال بالاسم بدل ما يتجاهل في صمت — المستخدم رماه جوه
+                // وله سبب، والمفروض يعرف ليه مادخلش
+                office.Add(Path.GetFileName(path));
+                continue;
+            }
+
+            if (kind == InputKind.UnsupportedImage)
+            {
+                unsupportedImages.Add(Path.GetFileName(path));
+                continue;
+            }
+
+            if (kind == InputKind.Unsupported)
+            {
+                continue;
+            }
+
+            if (Files.Any(f => string.Equals(f.SourcePath, path, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            string usable = path;
+
+            if (kind == InputKind.Image)
+            {
+                // الصورة بتتحوّل هنا مش وقت المعالجة، عشان باقي البرنامج
+                // ما يشوفش غير PDF. كده الترقيم والعلامة المائية والتجميع
+                // والمعاينة كلهم شغالين عليها من غير أي كود خاص بالصور.
+                string? pdf = ConvertImage(path);
+
+                if (pdf is null)
+                {
+                    failed.Add(Path.GetFileName(path));
+                    continue;
+                }
+
+                usable = pdf;
+                converted++;
+            }
+
+            var info = new FileInfo(usable);
+            Files.Add(new PdfFileItem(usable, info.Length, info.LastWriteTimeUtc)
+            {
+                SourcePath = path
+            });
+
             added++;
         }
 
-        StatusText = added > 0
-            ? $"اتضاف {added} ملف. الإجمالي {Files.Count}."
-            : "مفيش ملفات جديدة اتضافت (لازم تكون PDF ومش مكررة).";
+        StatusText = DescribeAdditions(added, converted, office, unsupportedImages, failed);
 
         if (added > 0)
         {
@@ -635,6 +1231,103 @@ public sealed class MainViewModel : ObservableObject
         }
 
         return added;
+    }
+
+    private string DescribeAdditions(
+        int added,
+        int converted,
+        List<string> office,
+        List<string> unsupportedImages,
+        List<string> failed)
+    {
+        var parts = new List<string>();
+
+        if (added > 0)
+        {
+            parts.Add(converted > 0
+                ? $"اتضاف {added} ملف (منهم {converted} صورة اتحوّلت لـ PDF). الإجمالي {Files.Count}."
+                : $"اتضاف {added} ملف. الإجمالي {Files.Count}.");
+        }
+
+        if (office.Count > 0)
+        {
+            parts.Add($"وورد/بوربوينت لسه مش مدعومين: {Names(office)}. حوّلهم لـ PDF الأول.");
+        }
+
+        if (unsupportedImages.Count > 0)
+        {
+            parts.Add($"صيغة الصورة مش مدعومة: {Names(unsupportedImages)}. " +
+                      "المدعوم JPG و PNG و BMP — احفظها JPEG وهتشتغل.");
+        }
+
+        if (failed.Count > 0)
+        {
+            parts.Add($"مقدرناش نقرا: {Names(failed)}. التفاصيل في اللوج.");
+        }
+
+        return parts.Count > 0
+            ? string.Join(" ", parts)
+            : "مفيش ملفات جديدة اتضافت (لازم تكون PDF أو صورة، ومش مكررة).";
+    }
+
+    /// <summary>أول تلات أسامي وبعدين "وكذا غيرهم" — عشان الشريط ما يطولش.</summary>
+    private static string Names(List<string> names)
+        => string.Join("، ", names.Take(3)) + (names.Count > 3 ? $" و{names.Count - 3} غيرهم" : "");
+
+    /// <summary>
+    /// بيحوّل صورة لـ PDF ويرجّع مساره، أو null لو فشل.
+    ///
+    /// الملف الناتج بيروح لمجلد الإخراج الدايم لو المستخدم طالب "حفظ الملفات
+    /// المحوّلة"، وإلا بيروح للتيمب زي أي ملف وسيط.
+    /// </summary>
+    private string? ConvertImage(string imagePath)
+    {
+        if (_imageConverter is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            // مش بننده ResolveProcessedOutputFolder عن قصد: هي مربوطة بـ
+            // "حفظ الملفات بعد المعالجة" وبتعمل مجلد جديد بتوقيت كل نداء —
+            // وده كان هيفرّق صور نفس التحميل على مجلدات مختلفة لو الثانية
+            // اتغيرت بينهم. التحويل ليه شرطه وليه مجلد ثابت.
+            string folder = Settings.SaveConvertedToPdf &&
+                            !string.IsNullOrWhiteSpace(App.DefaultOutputFolder) &&
+                            Directory.Exists(App.DefaultOutputFolder)
+                ? App.DefaultOutputFolder
+                : Path.Combine(Path.GetTempPath(), "PrintFlow", ConvertedFolderName);
+
+            Directory.CreateDirectory(folder);
+
+            string stem = ProcessedFileNaming.StemOf(imagePath);
+            string name = ProcessedFileNaming.MakeUnique(
+                stem + ".pdf", candidate => File.Exists(Path.Combine(folder, candidate)));
+
+            string destination = Path.Combine(folder, name);
+
+            var result = _imageConverter.Convert(new ImageConvertRequest
+            {
+                InputPath = imagePath,
+                OutputPath = destination
+            });
+
+            if (!result.Success)
+            {
+                Log.Add(result.Message);
+                _jobLog?.Info(result.Message);
+                return null;
+            }
+
+            _jobLog?.Info(result.Message);
+            return destination;
+        }
+        catch (Exception ex)
+        {
+            _jobLog?.Info($"فشل تحويل صورة: {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>
@@ -655,6 +1348,12 @@ public sealed class MainViewModel : ObservableObject
 
         OnPropertyChanged(nameof(FilesCountText));
         RefreshBookletSummary();
+
+        // عدد الصفحات هو اللي بيخلّي وصف الحذف يعرف يقول "ده هيشيل كل الملف"
+        RefreshDeleteSummary();
+
+        // والتوزيع محتاجه عشان يحسب "حوالي كام صفحة لكل مكنة"
+        RefreshDistributionSummary();
 
         // مقاس أول صفحة بيحدد تقسيم الورقة، فالمعاينة لازم تعرفه. من غيره
         // كانت هتفترض A4 طولية وتوري شكل غلط لشغل البوربوينت العرضي.
@@ -735,6 +1434,19 @@ public sealed class MainViewModel : ObservableObject
             {
                 var item = new PrinterItem(printer);
                 item.IsSelected = Settings.SelectedPrinters.Contains(printer.Name);
+
+                // اختيار مكنة بيغيّر التقسيم، والمستخدم لازم يشوف الرقم
+                // بيتحرك وهو بيعلّم — مش بعد ما يضغط طباعة
+                item.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName is nameof(PrinterItem.IsSelected) or nameof(PrinterItem.Status))
+                    {
+                        RefreshDistributionSummary();
+                        RefreshPrinterChoiceSummary();
+                        SyncSinglePrinterName();
+                    }
+                };
+
                 Printers.Add(item);
             }
             else
@@ -754,6 +1466,9 @@ public sealed class MainViewModel : ObservableObject
         }
 
         PrinterCount = Printers.Count;
+
+        RefreshDistributionSummary();
+        RefreshPrinterChoiceSummary();
 
         var windowsDefault = Printers.FirstOrDefault(p => p.IsDefault) ?? Printers.FirstOrDefault();
 
@@ -817,6 +1532,168 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    // ══════════ الاستقبال من بره البرنامج ══════════
+
+    private string _receptionStatus = "";
+    /// <summary>حالة الاستقبال — بتظهر في تاب الإعدادات العامة.</summary>
+    public string ReceptionStatus
+    {
+        get => _receptionStatus;
+        private set => SetProperty(ref _receptionStatus, value);
+    }
+
+    private bool _receptionIsRunning;
+    /// <summary>الاستقبال شغّال دلوقتي؟ (بيستخدمه التصفير عشان يفكّر المستخدم).</summary>
+    public bool ReceptionIsRunning
+    {
+        get => _receptionIsRunning;
+        private set => SetProperty(ref _receptionIsRunning, value);
+    }
+
+    /// <summary>
+    /// بيشغّل أو يوقّف مراقبة الطابعة الوهمية والمجلد المراقَب حسب الإعدادات.
+    ///
+    /// بيتنده عند بداية البرنامج وكل ما إعداد يتغيّر.
+    /// </summary>
+    public void ApplyReceptionSettings()
+    {
+        if (_incoming is null)
+        {
+            return;
+        }
+
+        bool wantsPrinter = App.ReceiveFromVirtualPrinter;
+        bool wantsFolder = !string.IsNullOrWhiteSpace(App.HotFolder);
+
+        _incoming.Stop();
+
+        if (!wantsPrinter && !wantsFolder)
+        {
+            AnnounceReception("الاستقبال مقفول.", isOff: true);
+            return;
+        }
+
+        string programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+
+        _incoming.Start(
+            VirtualPrinter.SpoolFolder(programData),
+            VirtualPrinter.QueueFolder(programData),
+            wantsFolder ? App.HotFolder : null);
+
+        var parts = new List<string>();
+
+        if (wantsPrinter)
+        {
+            parts.Add($"طابعة \"{VirtualPrinter.PrinterName}\"");
+        }
+
+        if (wantsFolder)
+        {
+            parts.Add($"مجلد {App.HotFolder}");
+        }
+
+        AnnounceReception($"الاستقبال شغّال من: {string.Join(" و", parts)}.", isOff: false);
+    }
+
+    /// <summary>
+    /// بتحدّث سطر حالة الاستقبال، وبتكتب في شريط النتايج لو الحالة اتغيّرت.
+    ///
+    /// ═══ ليه ═══
+    ///
+    /// سطر الحالة عايش في تاب "الإعدادات العامة"، وشريط النتايج عايش في
+    /// التاب الرئيسي — واللي في المطبعة قاعد على التاب الرئيسي طول اليوم.
+    /// يعني الاستقبال ممكن يقف وهو مش شايف أي حاجة.
+    ///
+    /// أخطر حالة: الاستقبال بيتقفل. ساعتها مفيش أي عرض بيتغيّر — البرنامج
+    /// شكله سليم تمامًا، والملفات اللي بتتبعت من بره بتروح في الهوا. السطر
+    /// ده هو الفرق بين "البرنامج مش شغال" و"البرنامج مش بيستقبل".
+    ///
+    /// بنتكلم بس لما الحالة **تتغيّر**، عشان مانزنّش على المستخدم بنفس
+    /// السطر كل ما حاجة تتحرك. وأول نداء عند فتح البرنامج والاستقبال مقفول
+    /// بيعدّي في صمت — مش تغيير، ده الوضع الطبيعي لمعظم الناس.
+    /// </summary>
+    private void AnnounceReception(string status, bool isOff)
+    {
+        bool firstTime = ReceptionStatus.Length == 0;
+
+        ReceptionIsRunning = !isOff;
+
+        if (ReceptionStatus == status)
+        {
+            return;
+        }
+
+        ReceptionStatus = status;
+
+        if (firstTime && isOff)
+        {
+            return;
+        }
+
+        string line = isOff
+            ? "[استقبال] الاستقبال اتقفل — البرنامج مش هيلقط أي حاجة من بره لحد ما تشغّله تاني."
+            : $"[استقبال] {status}";
+
+        Log.Add(line);
+        _jobLog?.Info(line);
+    }
+
+    /// <summary>بيوقّف الاستقبال — بيتنده وقت إغلاق البرنامج.</summary>
+    public void StopReception() => _incoming?.Stop();
+
+    /// <summary>
+    /// بينفّذ الشغل على ثريد الواجهة.
+    ///
+    /// لو مفيش ثريد واجهة (في التستات مثلًا) بينفّذ في مكانه على طول —
+    /// فالتستات بتفضل متزامنة وسهلة القراءة.
+    /// </summary>
+    private void OnUiThread(Action work)
+    {
+        var context = _uiThread;
+
+        if (context is null || ReferenceEquals(SynchronizationContext.Current, context))
+        {
+            work();
+            return;
+        }
+
+        context.Post(_ => work(), null);
+    }
+
+    /// <summary>
+    /// ملف وصل من الطابعة الوهمية أو من المجلد المراقَب.
+    ///
+    /// بيدخل نفس مسار التحميل اليدوي بالظبط — يعني بياخد كل الفحوصات
+    /// (الصيغة، التكرار، تحويل الصور) من غير أي كود خاص بالاستقبال.
+    /// </summary>
+    private void OnJobArrived(IncomingFile file)
+    {
+        int added = AddFiles([file.Path]);
+
+        string line = added > 0
+            ? $"[استقبال] وصل \"{file.FileName}\" من {file.SourceLabel}."
+            : $"[استقبال] \"{file.FileName}\" من {file.SourceLabel} — مادخلش القايمة (مكرر أو صيغة مش مدعومة).";
+
+        Log.Add(line);
+        _jobLog?.Info(line);
+
+        // الطباعة التلقائية مقفولة افتراضيًا: ورق بيطلع من غير ما حد ضغط
+        // حاجة ده سلوك مخيف في مطبعة. واللي شغّالها عارف إنه طالبها.
+        // الملف اللي بيوصل والبرنامج مشغول بيستنى في القايمة. لازم يتقال
+        // — غير كده بيقعد ساكت والمستخدم يفتكره اتطبع.
+        if (added > 0 && App.PrintReceivedAutomatically && (IsBusy || IsPrinting))
+        {
+            string waiting = $"[استقبال] فيه شغل ماشي — {added} ملف مستني في القايمة، اضغط «بدء معالجة الملفات» لما يخلص.";
+            Log.Add(waiting);
+            _jobLog?.Info(waiting);
+        }
+
+        if (added > 0 && App.PrintReceivedAutomatically && !IsBusy && !IsPrinting)
+        {
+            _ = ProcessCommand.ExecuteAsync();
+        }
+    }
+
     // ══════════ المعالجة والطباعة ══════════
 
     private async Task ProcessAsync()
@@ -852,110 +1729,201 @@ public sealed class MainViewModel : ObservableObject
 
                 if (!result.Success)
                 {
-                    _outputFiles = new List<string>();
-                    _outputPageCount = 0;
+                    _output = new List<PrintableDocument>();
                     StatusText = "فشلت المعالجة. شوف التفاصيل في اللوج.";
                     return;
                 }
 
-                _outputFiles = new List<string> { outputPath };
-                _outputPageCount = result.PageCount;
+                _output = [new PrintableDocument(outputPath, result.PageCount)];
                 StatusText = $"تمت المعالجة: {Files.Count} ملف في {result.PageCount} صفحة.";
             }
             else
             {
                 await ProcessWithoutMergingAsync(inputs);
             }
+
+            // ═══ الطباعة التلقائية جوّه الـ try عن قصد ═══
+            //
+            // قبل كده كانت بره، بعد الـ finally. يعني الترتيب كان:
+            // ترجّع IsBusy لـ false، تنوّر زرار «طباعة الآن» بإيدها
+            // (RaiseCanExecuteChanged)، وبعدين تبدأ تطبع. البرنامج كان
+            // بيقول للمستخدم «أنا فاضي» في نفس اللحظة اللي بيبعت فيها
+            // الأوردر. فيضغط، ويطلع الورق مرتين.
+            //
+            // المعالجة والطباعة التلقائية دول فعل واحد في عين المستخدم —
+            // ضغطة زرار واحدة — فلازم يفضلوا مشغولين لحد ما يخلصوا.
+            //
+            // ملحوظة: الـ return اللي فوق (لما الدمج يفشل) بيعدّي من هنا
+            // من غير طباعة، وده المطلوب.
+            // شرط _output: «المعالجة من غير دمج» بترجع عادي حتى لو كل
+            // الملفات وقعت، وساعتها الطباعة كانت بتمشي على لستة فاضية
+            // وتكتب «اضغط بدء معالجة الملفات الأول» فوق رسالة الفشل —
+            // فالمستخدم يتقاله اضغط الزرار اللي هو ضغطه للتو.
+            if (Settings.PrintDirectlyAfterProcessing && _output.Count > 0)
+            {
+                await PrintAsync();
+            }
         }
         finally
         {
             IsBusy = false;
-            PrintCommand.RaiseCanExecuteChanged();
-        }
-
-        if (Settings.PrintDirectlyAfterProcessing)
-        {
-            await PrintAsync();
+            RefreshCommandStates();
         }
     }
 
     /// <summary>
-    /// السلسلة الكاملة لمستند واحد: دمج ← إضافات على الصفحة ← تجميع شرائح
-    /// ← إضافات على الورقة.
+    /// مرحلة واحدة في السلسلة: بتاخد ملف داخل وبتطلّع ملف خارج.
+    /// الاسم بيظهر في اللوج لو المرحلة وقعت.
+    /// </summary>
+    private readonly record struct PipelineStage(string Name, Func<string, string, MergeResult> Run);
+
+    /// <summary>
+    /// في أي معالجة مطلوبة أصلًا على الملفات؟
     ///
-    /// لما مايكونش في تجميع شرائح، كل ده بيرجع خطوة واحدة زي الأول بالظبط —
-    /// ومفيش ملفات مؤقتة أصلًا.
+    /// بيسأل نفس أسئلة <see cref="RunPipelineAsync"/> بالظبط — بما فيها
+    /// وجود الخدمة نفسها. لو الاتنين اختلفوا، هيبقى في وضع البرنامج بيقول
+    /// فيه "مفيش معالجة" وهو أصلًا كان هيعمل معالجة (أو العكس).
+    /// </summary>
+    private bool HasProcessingWork(MergeRequest request)
+    {
+        if (!request.HasNothingToDo)
+        {
+            return true;
+        }
+
+        if (_slideComposer is not null && !SlideRequest.From(Settings, "", "").IsPassThrough)
+        {
+            return true;
+        }
+
+        return _pageScaler is not null && !PageScaling.IsIdentity(Settings.ScalePercent);
+    }
+
+    /// <summary>
+    /// عدد صفحات ملف بعد الحذف. بتتستخدم في حساب "من كام" في الترقيم المتصل
+    /// قبل ما المعالجة تبدأ أصلًا.
+    /// </summary>
+    private int SurvivingPages(int pageCount)
+        => Settings.DeletePages
+            ? PageRanges.Remaining(Settings.PagesToDelete, pageCount).Count
+            : pageCount;
+
+    /// <summary>
+    /// السلسلة الكاملة لمستند واحد:
+    ///
+    ///   ١) دمج (+ حذف صفحات من كل ملف) + الإضافات اللي على الصفحة الأصلية
+    ///   ٢) تجميع شرائح أو كتيّب
+    ///   ٣) الإضافات اللي على الورقة كاملة
+    ///   ٤) مقياس الصفحة
+    ///
+    /// المراحل ٢ و٣ و٤ بتتبني **بس لو ليها لازمة**. الحالة الشائعة (مفيش
+    /// شرائح ولا كتيّب ولا مقياس) بتبقى مرحلة واحدة بتكتب على الملف النهائي
+    /// على طول — من غير أي ملف مؤقت ولا نسخة زيادة، زي ما كانت بالظبط.
+    ///
+    /// الشكل ده اتكتب من أول وجديد بدل التداخل اللي كان: كل مرحلة جديدة كانت
+    /// بتضيف مسار جديد ونقطة ترتيب جديدة تتنسي (وده اللي حصل فعلًا مع الكتيّب).
     /// </summary>
     private async Task<MergeResult> RunPipelineAsync(MergeRequest request)
     {
-        // مفيش شرائح؟ كل الإضافات بتتحط مرة واحدة والخلاص
-        if (Settings.SlidesPerSheet <= 1 || _slideComposer is null)
-        {
-            return await Task.Run(() => _mergeService.Merge(request));
-        }
+        // القرار بيتاخد من SlideRequest نفسه — عشان الكتيّب والشرائح يبقى
+        // ليهم مصدر حقيقة واحد. قبل كده كان السؤال متكرر هنا بالغلط.
+        var slideRequest = SlideRequest.From(Settings, "", "");
+        bool composing = !slideRequest.IsPassThrough && _slideComposer is not null;
 
-        var before = SlidePipeline.BeforeSlides(App);
+        var scaleRequest = new ScaleRequest
+        {
+            InputPath = "",
+            OutputPath = "",
+            Percent = Settings.ScalePercent
+        };
+
+        bool scaling = !scaleRequest.IsPassThrough && _pageScaler is not null;
+
+        // من غير تجميع، كل الإضافات بتتحط في المرحلة الأولى مرة واحدة
+        var before = composing ? SlidePipeline.BeforeSlides(App) : SlidePipeline.Everything();
         var after = SlidePipeline.AfterSlides(App);
 
-        string stem = Path.Combine(
-            Path.GetDirectoryName(request.OutputPath)!,
-            Path.GetFileNameWithoutExtension(request.OutputPath));
+        var stages = new List<PipelineStage>
+        {
+            new("الدمج", (_, output) =>
+                _mergeService.Merge(request.KeepOnly(before) with { OutputPath = output }))
+        };
 
-        string merged = stem + ".stage1.pdf";
-        string composed = stem + ".stage2.pdf";
+        if (composing)
+        {
+            stages.Add(new(slideRequest.Booklet ? "الكتيّب" : "تجميع الشرائح", (input, output) =>
+                _slideComposer!.Compose(slideRequest with { InputPath = input, OutputPath = output })));
+
+            // OverlayOnly بتصفّر حذف الصفحات جواها — الملف الداخل هنا
+            // اتحذف منه خلاص، ولو الحذف اتكرر كان هيشيل ورق مجمّع عشوائي
+            if (request.OverlayOnly(after, "", "").HasAnyOverlay)
+            {
+                stages.Add(new("الإضافات على الورقة", (input, output) =>
+                    _mergeService.Merge(request.OverlayOnly(after, input, output))));
+            }
+        }
+
+        if (scaling)
+        {
+            stages.Add(new("المقياس", (input, output) =>
+                _pageScaler!.Scale(scaleRequest with { InputPath = input, OutputPath = output })));
+        }
+
+        return await Task.Run(() => RunStages(stages, request.OutputPath));
+    }
+
+    /// <summary>
+    /// بيشغّل المراحل ورا بعض: كل واحدة بتكتب في ملف مؤقت والأخيرة بتكتب في
+    /// الملف النهائي. أول فشل بيوقّف السلسلة، والملفات المؤقتة بتتمسح دايمًا.
+    /// </summary>
+    private static MergeResult RunStages(IReadOnlyList<PipelineStage> stages, string finalOutput)
+    {
+        string stem = Path.Combine(
+            Path.GetDirectoryName(finalOutput)!,
+            Path.GetFileNameWithoutExtension(finalOutput));
+
+        var temporaries = new List<string>();
+        var messages = new List<string>();
 
         try
         {
-            // ١) الدمج + الإضافات اللي على الصفحة الأصلية
-            var mergeResult = await Task.Run(
-                () => _mergeService.Merge(request.KeepOnly(before) with { OutputPath = merged }));
+            string current = "";
+            int pageCount = 0;
 
-            if (!mergeResult.Success)
+            for (int i = 0; i < stages.Count; i++)
             {
-                return mergeResult;
-            }
+                bool last = i == stages.Count - 1;
+                string output = last ? finalOutput : $"{stem}.stage{i + 1}.pdf";
 
-            // ٢) تجميع الشرائح على الورق
-            var slideRequest = SlideRequest.From(Settings, merged, composed);
-            var slideResult = await Task.Run(() => _slideComposer.Compose(slideRequest));
-
-            if (!slideResult.Success)
-            {
-                return slideResult;
-            }
-
-            // ٣) الإضافات اللي على الورقة كاملة
-            if (after.Nothing || !request.KeepOnly(after).HasAnyOverlay)
-            {
-                File.Move(composed, request.OutputPath, overwrite: true);
-
-                return MergeResult.Succeeded(
-                    $"{mergeResult.Message.Replace("[نجاح] ", "")} — {slideResult.Message.Replace("[نجاح] ", "")}",
-                    slideResult.PageCount);
-            }
-
-            var finalResult = await Task.Run(() => _mergeService.Merge(
-                request.KeepOnly(after) with
+                if (!last)
                 {
-                    InputFiles = [composed],
-                    OutputPath = request.OutputPath
-                }));
+                    temporaries.Add(output);
+                }
 
-            if (!finalResult.Success)
-            {
-                return finalResult;
+                var result = stages[i].Run(current, output);
+
+                if (!result.Success)
+                {
+                    // اسم المرحلة بيتقال عشان الرسالة تفرق بين "الدمج وقع"
+                    // و"التجميع وقع" — الاتنين كانوا بيطلعوا زي بعض قبل كده
+                    return MergeResult.Failed(
+                        $"{stages[i].Name}: {result.Message.Replace("[فشل] ", "")}");
+                }
+
+                messages.Add(result.Message.Replace("[نجاح] ", ""));
+                pageCount = result.PageCount;
+                current = output;
             }
 
-            return MergeResult.Succeeded(
-                $"{mergeResult.Message.Replace("[نجاح] ", "")} — {slideResult.Message.Replace("[نجاح] ", "")}",
-                finalResult.PageCount);
+            return MergeResult.Succeeded(string.Join(" — ", messages), pageCount);
         }
         finally
         {
-            // الملفات الوسيطة مالهاش لازمة بعد كده، ومش عايزين نسيبها
-            // تتراكم في التيمب على أجهزة المطابع
-            TryDelete(merged);
-            TryDelete(composed);
+            // مش عايزين ملفات وسيطة تتراكم في التيمب على أجهزة المطابع
+            foreach (string path in temporaries)
+            {
+                TryDelete(path);
+            }
         }
     }
 
@@ -992,13 +1960,22 @@ public sealed class MainViewModel : ObservableObject
     {
         var overlays = MergeRequest.From(Settings, App, inputs, string.Empty);
 
-        // مفيش أي حاجة تتحط على الورق؟ يبقى إعادة كتابة الملفات هدر خالص —
+        // مفيش أي شغل مطلوب؟ يبقى إعادة كتابة الملفات هدر خالص —
         // بنطبع الأصول زي ما هي، وده كمان بيحافظ على جودتها بالظبط.
-        if (overlays.PageNumbers is null && overlays.Watermark is null && overlays.CustomText is null)
+        //
+        // الشرط ده كان بيسأل عن الإضافات بس، فالوضع ده + شرائح (أو كتيّب أو
+        // حذف صفحات أو مقياس) كان بيعدّي الملفات زي ما هي والمستخدم فاكر
+        // إن الإعدادات اتنفّذت.
+        if (!HasProcessingWork(overlays))
         {
-            _outputFiles = inputs.ToList();
-            _outputPageCount = Files.Sum(f => f.PageCount ?? 0);
-            StatusText = $"جاهز لطباعة {inputs.Count} ملف كل واحد لوحده (مفيش إضافات مطلوبة).";
+            // عدد صفحات كل ملف من القايمة — التوزيع محتاجه، والصفر معناه
+            // مقدرناش نعده والموازن بيتعامل معاه على إنه صفحة واحدة
+            _output = inputs
+                .Select(path => new PrintableDocument(
+                    path,
+                    Files.FirstOrDefault(f => f.FullPath == path)?.PageCount ?? 0))
+                .ToList();
+            StatusText = $"جاهز لطباعة {inputs.Count} ملف كل واحد لوحده (مفيش معالجة مطلوبة).";
             _jobLog?.Info($"وضع من غير دمج: {inputs.Count} ملف هتتطبع زي ما هي");
             return;
         }
@@ -1007,11 +1984,13 @@ public sealed class MainViewModel : ObservableObject
         Directory.CreateDirectory(folder);
         _jobLog?.Info($"بدء معالجة {inputs.Count} ملف كل واحد لوحده → {folder}");
 
-        // عدّ الصفحات الأول: الترقيم المتصل محتاج يعرف الإجمالي قبل ما يبدأ
-        var pageCounts = await CountPagesAsync(inputs);
+        // عدّ الصفحات الأول: الترقيم المتصل محتاج يعرف الإجمالي قبل ما يبدأ.
+        // بنعدّ الصفحات اللي **هتفضل** بعد الحذف، مش الأصلية — وإلا "من ٤٠"
+        // هتفضل مكتوبة على ورق عدده ٣٠.
+        var pageCounts = (await CountPagesAsync(inputs)).Select(SurvivingPages).ToList();
         int grandTotal = pageCounts.Where(c => c > 0).Sum();
 
-        var produced = new List<string>();
+        var produced = new List<PrintableDocument>();
         var failures = new List<string>();
         int nextNumber = 1;
         int totalProcessedPages = 0;
@@ -1036,7 +2015,8 @@ public sealed class MainViewModel : ObservableObject
 
             if (result.Success)
             {
-                produced.Add(destination);
+                // عدد صفحات الناتج (مش الأصل) — بعد الحذف والتجميع
+                produced.Add(new PrintableDocument(destination, result.PageCount));
                 totalProcessedPages += result.PageCount;
                 nextNumber += result.PageCount;
             }
@@ -1055,8 +2035,7 @@ public sealed class MainViewModel : ObservableObject
             }
         }
 
-        _outputFiles = produced;
-        _outputPageCount = totalProcessedPages;
+        _output = produced;
 
         if (produced.Count == 0)
         {
@@ -1123,14 +2102,157 @@ public sealed class MainViewModel : ObservableObject
         return counts;
     }
 
+    /// <summary>
+    /// ١ معناها فيه أوردر بيتبعت دلوقتي. بيتقرا ويتكتب بـ Interlocked عشان
+    /// مايبقاش فيه شق بين الفحص والقفل حد يدخل منه.
+    /// </summary>
+    private int _printInFlight;
+
+    /// <summary>بيتلغي لما المستخدم يضغط «إيقاف فوري». null = مفيش طباعة ماشية.</summary>
+    private CancellationTokenSource? _printCancel;
+
+    /// <summary>التوكن اللي بيوصل للموزّع ولـ SumatraPDF.</summary>
+    private CancellationToken PrintToken => _printCancel?.Token ?? CancellationToken.None;
+
+    /// <summary>فيه أوردر بيتبعت دلوقتي؟ الزراير بتتقفل على أساسها.</summary>
+    public bool IsPrinting => Volatile.Read(ref _printInFlight) == 1;
+
+    /// <summary>
+    /// بيبعت الأوردر للمكن. أوردر واحد في المرة، مهما كان الباب اللي دخل منه.
+    ///
+    /// ═══ ليه القفل هنا جوّه، مش على الزرار ═══
+    ///
+    /// في ١.٩.٧ الحارس الوحيد كان <c>AsyncRelayCommand._isRunning</c> — يعني
+    /// حارس على **الزرار**، مش على الطباعة. والطباعة ليها أكتر من باب:
+    /// الزرار، والطباعة التلقائية بعد المعالجة، والملفات الجاية من المجلد
+    /// المراقب. الطباعة التلقائية كانت بتنده الدالة دي **على طول** من غير
+    /// ما تعدّي على الأمر — فالحارس مايقفلش، والزرار يفضل مفتوح والأوردر
+    /// لسه بيتبعت.
+    ///
+    /// النتيجة اللي المعمل قفشها: المستخدم يضغط «بدء معالجة الملفات»، تخلص
+    /// المعالجة، الطباعة التلقائية تبدأ، الشاشة تسكت ثانية وهي بتقرا حالة
+    /// الطابعات — فيضغط «طباعة الآن» فاكر إن مفيش حاجة بتحصل، و**الأوردر
+    /// يطلع مرتين**. ٥٧٠ صفحة بقت ١١٤٠.
+    ///
+    /// الدرس: أي حارس على الواجهة ليه طريق حواليه. القفل لازم يبقى على
+    /// الفعل نفسه — في أول سطر من الدالة اللي بتبعت الورق.
+    ///
+    /// <see cref="WorkDispatcher"/> بيضمن إن القطعة ماتتبعتش مرتين **جوّه
+    /// الأوردر الواحد**. هو مايعرفش حاجة عن أوردر تاني ماشي جنبه بنفس
+    /// الملفات — وده بالظبط اللي القفل ده بيمنعه.
+    /// </summary>
     private async Task PrintAsync()
     {
-        if (_outputFiles.Count == 0)
+        if (Interlocked.Exchange(ref _printInFlight, 1) == 1)
         {
-            StatusText = "اضغط \"بدء معالجة الملفات\" الأول.";
+            string busy = "[تجاهل] فيه أوردر بيتبعت دلوقتي — الطلب ده اتجاهل عشان الشغل مايطلعش مرتين.";
+            Log.Add(busy);
+            _jobLog?.Info(busy);
             return;
         }
 
+        // الـ try بيبدأ من هنا مش من بعد RefreshCommandStates: القفل
+        // اتاخد خلاص، فأي رمية بعده لازم تلاقي finally يفكّه. من غير كده
+        // البرنامج بيتقفل للأبد ومفيش طريق يرجّعه غير قفله وفتحه.
+        try
+        {
+            _printCancel = new CancellationTokenSource();
+            RefreshCommandStates();
+            await PrintCoreAsync();
+        }
+        finally
+        {
+            var cts = _printCancel;
+            _printCancel = null;
+            cts?.Dispose();
+            Volatile.Write(ref _printInFlight, 0);
+            RefreshCommandStates();
+        }
+    }
+
+    /// <summary>الزراير كلها بتسأل عن نفس الحالة، فبتتحدّث مع بعض.</summary>
+    private void RefreshCommandStates()
+    {
+        OnPropertyChanged(nameof(IsPrinting));
+        OnPropertyChanged(nameof(IsIdle));
+        PrintCommand.RaiseCanExecuteChanged();
+        ProcessCommand.RaiseCanExecuteChanged();
+        ResetCommand.RaiseCanExecuteChanged();
+        CancelCommand.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// إيقاف فوري.
+    ///
+    /// بيلغي التوكن بس — مش بيقتل حاجة بالعافية. الموزّع بيشوف الإلغاء،
+    /// يرجّع القطعة اللي في إيده للطابور، ويوقّف كل العمال. واللي ماتبعتش
+    /// بيطلع في التقرير بالاسم تحت «ماتبعتش خالص».
+    ///
+    /// اللي وصل طابور ويندوز خلاص مش بيرجع — ده بقى شغل السبولر، ولازم
+    /// المستخدم يعرف كده صراحة مش يفتكر إن الإيقاف رجّع كل حاجة.
+    /// </summary>
+    private void CancelPrinting()
+    {
+        var cts = _printCancel;
+
+        if (cts is null || cts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        string line = "[إيقاف] المستخدم طلب إيقاف فوري — مفيش حاجة جديدة هتتبعت.";
+        Log.Add(line);
+        _jobLog?.Info(line);
+        StatusText = "بنوقف... اللي وصل طابور الطابعة لازم تلغيه من ويندوز.";
+
+        try
+        {
+            cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // الأوردر خلص لوحده قبل ما نلحق — مفيش حاجة تتلغي
+        }
+    }
+
+    private async Task PrintCoreAsync()
+    {
+        if (ResolveDocumentsToPrint().Count == 0)
+        {
+            StatusText = "حمّل ملفات الأول.";
+            return;
+        }
+
+        // IsBusy بتتظبط هنا **قبل** قراءة حالة الطابعات، مش بعدها.
+        //
+        // قراءة الطابعات من WMI بتاخد وقت حقيقي على جهاز فيه مكن كتير،
+        // وكانت بتحصل والشاشة شكلها فاضي: شريط الانتظار مخفي والزراير
+        // مفتوحة. الثانية دي بالظبط هي اللي المستخدم بيضغط فيها تاني.
+        //
+        // والـ try/finally حوالين الباقي كله مش حوالين الإرسال بس: دلوقتي
+        // الزراير متربطة بـ IsBusy، فلو رميت حاجة في أي سطر بعد ما رفعناها
+        // البرنامج بيتقفل قدام المستخدم للأبد.
+        // بنرجّعها لقيمتها القديمة مش لـ false على طول.
+        //
+        // لما «بدء معالجة الملفات» هي اللي نادت الطباعة، IsBusy بتبقى
+        // مرفوعة منها هي. لو رجّعناها false هنا، البرنامج بيقول «أنا
+        // فاضي» والأوردر لسه على السلك — وده بالظبط أصل مشكلة ١.٩.٧.
+        bool wasBusy = IsBusy;
+
+        try
+        {
+            IsBusy = true;
+            StatusText = "بنقرا حالة الطابعات...";
+            await SendTheOrderAsync();
+        }
+        finally
+        {
+            IsBusy = wasBusy;
+        }
+    }
+
+    private async Task SendTheOrderAsync()
+    {
         SyncSelectedPrintersToSettings();
 
         // بنحدّث حالة الطابعات **لحظة الطباعة** مش بنعتمد على آخر تحديث دوري.
@@ -1157,93 +2279,227 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
-        IsBusy = true;
+        var documents = ResolveDocumentsToPrint();
+
+        // طباعة خام: المستخدم لازم يعرف إن إعدادات المعالجة مش هتتطبق،
+        // وإلا هيستنى بوكليت وعلامة مائية ويلاقي ورق سادة.
+        if (_output.Count == 0)
+        {
+            string raw = "[طباعة مباشرة] الملفات هتتبعت زي ما هي — من غير دمج ولا بوكليت " +
+                         "ولا علامة مائية ولا ترقيم. لو عايز الحاجات دي، اضغط «بدء معالجة الملفات» الأول.";
+            Log.Add(raw);
+            _jobLog?.Info(raw);
+        }
+
         StatusText = "جاري الإرسال للطباعة...";
 
+        // مكنة واحدة مالهاش حاجة تتقسّم عليها، وأكتر من واحدة بتتقسّم
+        // إلا لو المستخدم طلب صراحة إن كل مكنة تطبع العدد كامل.
+        bool distributing = Settings.DistributeCopies && targets.Count > 1;
+
         _jobLog?.Info(
-            $"طباعة: {_outputFiles.Count} مستند × {targets.Count} طابعة ({string.Join("، ", targets.Select(t => t.Name))}) — " +
+            $"طباعة: {documents.Count} مستند × {targets.Count} طابعة ({string.Join("، ", targets.Select(t => t.Name))}) — " +
             $"{Settings.TotalCopies} نسخة، {Settings.PaperSize}" +
             $"{(Settings.Grayscale ? "، أبيض وأسود" : "")}{(Settings.Duplex ? "، وجهين" : "")}" +
-            $"{(Settings.DistributeCopies ? "، توزيع" : "")}");
+            $"{(distributing ? "، توزيع" : "")}");
 
-        try
+        if (distributing)
         {
-            foreach (var file in _outputFiles)
+            await PrintDistributedAsync(targets, documents);
+        }
+        else
+        {
+            foreach (var line in await PrintUniformAsync(targets, documents))
             {
-                var results = Settings.DistributeCopies && targets.Count > 1
-                    ? await PrintDistributedAsync(file, targets)
-                    : await PrintUniformAsync(file, targets);
-
-                foreach (var line in results)
-                {
-                    Log.Add(line);
-                    _jobLog?.Info(line);
-                }
+                Log.Add(line);
+                _jobLog?.Info(line);
             }
 
             StatusText = $"خلص الإرسال إلى {targets.Count} طابعة.";
         }
-        finally
-        {
-            IsBusy = false;
-        }
     }
 
-    /// <summary>نفس عدد النسخ على كل طابعة، والطابعات بالتوازي.</summary>
-    private async Task<string[]> PrintUniformAsync(string file, List<PrinterItem> targets)
+    /// <summary>كل طابعة تاخد كل المستندات بالعدد الكامل من النسخ.</summary>
+    private async Task<string[]> PrintUniformAsync(
+        List<PrinterItem> targets, List<PrintableDocument> documents)
     {
         // مفيش Task.Run دلوقتي: PrintAsync بقت غير متزامنة بجد (WaitForExitAsync)،
         // فمفيش ثريد بيتحجز وهو مستني بروسيس الطباعة يخلص.
-        var tasks = targets.Select(printer =>
-            _printService.PrintAsync(PrintJob.From(
-                Settings, file, printer.Name, Settings.TotalCopies, _outputPageCount)));
+        var tasks =
+            from document in documents
+            from printer in targets
+            select _printService.PrintAsync(
+                PrintJob.From(Settings, document.Path, printer.Name, Settings.TotalCopies, document.Pages),
+                PrintToken);
 
-        return await Task.WhenAll(tasks);
+        var outcomes = await Task.WhenAll(tasks);
+
+        return outcomes.Select(o => o.Message).ToArray();
     }
 
-    /// <summary>توزيع إجمالي النسخ على الطابعات.</summary>
-    private async Task<string[]> PrintDistributedAsync(string file, List<PrinterItem> targets)
+    /// <summary>
+    /// بيقسّم الشغل كله على المكن بحيث الكل يخلص مع بعض — **وبيفضل ماسك
+    /// الشغل وهو ماشي** بدل ما يبعته كله ويسيبه.
+    ///
+    /// ═══ اللي اتغيّر في ١.٩.٦ ═══
+    ///
+    /// قبل كده الخطة كانت بتتحسب مرة واحدة وكل الأوامر تتبعت في نفس
+    /// اللحظة (<c>Task.WhenAll</c> على كل النصايب). ده كان شغال تمام طول
+    /// ما كل المكن سليمة، وبيقع في أول عطل حقيقي في المطبعة:
+    ///
+    ///   • مكنة الورق خلص منها بتفضل **تقبل** جوبات وتكوّمها في طابور
+    ///     ويندوز بتاعها، والمكن التانية بتخلص وتقف. الأوردر بيستنى أبطأ
+    ///     حاجة في الأوضة.
+    ///   • مكنة اتفصلت بعد ما الأوامر اتبعتت = نصيبها كله ضاع، ومحدش
+    ///     يعرف غير لما يعد الورق.
+    ///
+    /// دلوقتي الشغل بيتقطّع لقطع صغيرة (<see cref="WorkSlicing"/>) وكل
+    /// مكنة بتسحب قطعتها لما تفضى (<see cref="WorkDispatcher"/>). المكنة
+    /// اللي وقعت بتبطّل تسحب، وشغلها اللي لسه ماتبعتش بيروح للباقيين.
+    ///
+    /// الخطة الأصلية لسه بتتحسب وبتتكتب في اللوج — بس دلوقتي بقت
+    /// **توقُّع** مش أمر نهائي، والتقرير في الآخر بيقول اللي حصل فعلًا.
+    /// </summary>
+    private async Task PrintDistributedAsync(
+        List<PrinterItem> targets, List<PrintableDocument> documents)
     {
-        var distribution = CopyDistributionCalculator.Distribute(
+        var plan = WorkloadBalancer.Balance(
+            documents,
             Settings.TotalCopies,
             targets.Select(p => p.Name).ToList());
 
-        var tasks = distribution.Select(item =>
-            _printService.PrintAsync(PrintJob.From(
-                Settings, file, item.PrinterName, item.CopiesAssigned, _outputPageCount)));
+        string expected = "المتوقع — " + plan.Describe();
+        Log.Add(expected);
+        _jobLog?.Info(expected);
 
-        return await Task.WhenAll(tasks);
+        foreach (var printer in plan.Printers.Where(p => !p.IsIdle))
+        {
+            _jobLog?.Info($"  {printer.PrinterName}: {printer.Documents} مستند، {printer.Pages} صفحة");
+        }
+
+        // Task.Run عشان حلقة التوزيع كلها تمشي بعيد عن ثريد الواجهة.
+        // من غيرها كل await جوّه الموزّع بيرجع للواجهة، والواجهة بتتلجلج
+        // طول الأوردر. الـ say بيمرّ على OnUiThread أصلًا فالسطور بتوصل صح.
+        var report = await Task.Run(() => WorkDispatcher.RunAsync(
+            WorkSlicing.Lanes(plan),
+            (printerName, unit, token) => _printService.PrintAsync(
+                PrintJob.From(Settings, unit.Path, printerName, unit.Copies, unit.Pages), token),
+            _printerHealth,
+            say: line => OnUiThread(() =>
+            {
+                Log.Add(line);
+                _jobLog?.Info(line);
+            }),
+            cancellationToken: PrintToken));
+
+        string summary = report.Summarise();
+        Log.Add(summary);
+        _jobLog?.Info(summary);
+
+        // الملازم اللي في الشك أو اللي ماوصلتش بتتقال **بالاسم**. الرقم
+        // المجمّع لوحده مابيساعدش حد في المطبعة — هو محتاج يعرف أنهي ملف
+        // وكام نسخة عشان يعيدها.
+        foreach (var unit in report.InDoubt)
+        {
+            string line = $"  ⚠ في الشك: {Path.GetFileName(unit.Path)} — {unit.Copies} نسخة. " +
+                          "عُد الورق الطالع قبل ما تعيدها عشان ماتطلعش مرتين.";
+            Log.Add(line);
+            _jobLog?.Info(line);
+        }
+
+        foreach (var unit in report.NeverSent)
+        {
+            string line = $"  ⚠ ماتبعتش خالص: {Path.GetFileName(unit.Path)} — {unit.Copies} نسخة. " +
+                          "دي مضمون إنها ماطبعتش، ابعتها تاني بأمان.";
+            Log.Add(line);
+            _jobLog?.Info(line);
+        }
+
+        StatusText = report.Clean
+            ? $"خلص التوزيع على {report.Printers.Count(p => p.Units > 0)} طابعة."
+            : "خلص التوزيع بس في شغل محتاج مراجعة — شوف النتائج.";
     }
+
+    /// <summary>
+    /// المكن اللي الشغل هيروح لها.
+    ///
+    /// ═══ اتغيّرت في ١.٩.٦ ═══
+    ///
+    /// كانت بتسأل الأول: وضع "أكتر من طابعة" مفتوح؟ لو أه خد المعلّم
+    /// عليهم، لو لأ خد الطابعة اللي في القايمة المنسدلة.
+    ///
+    /// المشكلة إن المستخدم مكانش بيلاقي المفتاح ده أصلًا: مربع صغير في
+    /// آخر قايمة طويلة، وهو اللي بيخبّي قايمة اختيار المكن **في عمود
+    /// تاني خالص**. يعني قرار واحد متقسّم على تلات أماكن، والطريق
+    /// للميزة مقفول بالميزة نفسها. جه بلاغ بالنص: "مش عارف اختار أكتر
+    /// من واحدة".
+    ///
+    /// القاعدة دلوقتي جملة واحدة: **اللي معلّم عليه هو اللي بيطبع.**
+    /// مفيش مفتاح ولا وضع ولا خطوة مخفية. وبس لو مفيش أي حاجة معلّمة
+    /// بنرجع للطابعة الافتراضية عشان البرنامج مايقفش في وش المستخدم.
+    /// </summary>
+    /// <summary>
+    /// المستندات اللي هتتطبع.
+    ///
+    /// لو فيه ناتج معالجة بنطبعه. لو مفيش، بنطبع الملفات زي ما هي —
+    /// اللي عايز يطبع ملف جاهز مالوش دعوة بالمعالجة أصلًا، وكان البرنامج
+    /// بيقوله «اضغط بدء معالجة الملفات الأول» على حاجة هو مش طالبها.
+    /// </summary>
+    private List<PrintableDocument> ResolveDocumentsToPrint()
+        => _output.Count > 0
+            ? _output
+            : Files.Select(f => new PrintableDocument(f.FullPath, f.PageCount ?? 0)).ToList();
 
     private List<PrinterItem> ResolveTargetPrinters()
     {
-        IEnumerable<PrinterItem> candidates;
+        var ticked = Printers.Where(p => p.IsSelected && p.IsEligible).ToList();
 
-        if (Settings.UseMultiplePrinters)
+        if (ticked.Count > 0)
         {
-            candidates = Printers.Where(p => p.IsSelected);
-        }
-        else if (!string.IsNullOrWhiteSpace(Settings.PrinterName))
-        {
-            candidates = Printers.Where(p => p.Name == Settings.PrinterName);
-        }
-        else
-        {
-            var chosen = Printers.FirstOrDefault(p => p.IsDefault) ?? Printers.FirstOrDefault();
-            candidates = chosen is null ? Enumerable.Empty<PrinterItem>() : new[] { chosen };
+            return ticked;
         }
 
-        return candidates.Where(p => p.IsEligible).ToList();
+        // مفيش أي تعليم — بنرجع للاسم المحفوظ، وبعدين للافتراضية
+        var fallback = Printers.FirstOrDefault(p => p.Name == Settings.PrinterName)
+                       ?? Printers.FirstOrDefault(p => p.IsDefault)
+                       ?? Printers.FirstOrDefault();
+
+        return fallback is not null && fallback.IsEligible ? [fallback] : [];
     }
 
     // ══════════ تصفير ══════════
 
+    /// <summary>
+    /// زرار "حذف الملفات وإرجاع الإعدادات" الأحمر.
+    ///
+    /// **بيلمس إعدادات الجوب بس** (<see cref="Settings"/>) — الإعدادات
+    /// العامة و<see cref="App"/> مش من شغله خالص، والتست
+    /// <c>Reset_Never_Touches_The_General_Settings</c> حارس على كده
+    /// بالـ Reflection على كل خاصية.
+    ///
+    /// السطرين اللي تحت (الرسالة الصريحة + إعادة سطر الاستقبال في اللوج)
+    /// اتضافوا بعد بلاغ حقيقي: المستخدم ضغط الزرار ولقى الاستقبال باين
+    /// مقفول، فافتكر إن الزرار هو اللي قفله. الزرار مالوش دعوة — بس
+    /// <c>Log.Clear()</c> بيمسح سطر "الاستقبال شغّال"، والرسالة القديمة
+    /// كانت بتقول "اترجعت الإعدادات" على إطلاقها. الاتنين مع بعض بيدّوا
+    /// انطباع إن كل حاجة اترجعت للصفر.
+    /// </summary>
     private void Reset()
     {
+        // نفس مبدأ القفل بتاع الطباعة: الحارس على الفعل، مش على الزرار.
+        // Reset بيمسح _output — ولو ده حصل والأوردر لسه بيتبعت، الموزّع
+        // بيلاقي الأرض اتسحبت من تحته في نص الشغل.
+        if (IsBusy || IsPrinting)
+        {
+            string busy = "[تجاهل] فيه شغل ماشي دلوقتي — استنى يخلص قبل ما ترجّع الإعدادات.";
+            Log.Add(busy);
+            _jobLog?.Info(busy);
+            return;
+        }
+
         Files.Clear();
         Log.Clear();
-        _outputFiles = new List<string>();
-        _outputPageCount = 0;
+        _output = new List<PrintableDocument>();
 
         Settings.CopyFrom(new PrintSettings());
 
@@ -1252,8 +2508,15 @@ public sealed class MainViewModel : ObservableObject
             printer.IsSelected = false;
         }
 
-        PrintCommand.RaiseCanExecuteChanged();
-        StatusText = "اترجعت الإعدادات للوضع الافتراضي.";
+        // اللوج اتمسح لسه — لو الاستقبال شغّال لازم يفضل باين، مش يختفي
+        // مع باقي السطور ويسيب المستخدم مش عارف هو شغّال ولا لأ
+        if (ReceptionIsRunning)
+        {
+            Log.Add($"[استقبال] {ReceptionStatus}");
+        }
+
+        RefreshCommandStates();
+        StatusText = "اترجعت إعدادات الجوب للوضع الافتراضي. الإعدادات العامة والاستقبال زي ما هما.";
     }
 
     /// <summary>
@@ -1287,6 +2550,22 @@ public sealed class MainViewModel : ObservableObject
                 if (Directory.GetLastWriteTime(path) < cutoff)
                 {
                     Directory.Delete(path, recursive: true);
+                }
+            }
+
+            // الصور اللي اتحوّلت لـ PDF من غير ما المستخدم يطلب حفظها.
+            // بنمسح **الملفات** مش المجلد، عشان مانمسحش صورة اتحوّلت
+            // من دقايق وهي لسه في القايمة.
+            string converted = Path.Combine(folder, ConvertedFolderName);
+
+            if (Directory.Exists(converted))
+            {
+                foreach (var path in Directory.EnumerateFiles(converted, "*.pdf"))
+                {
+                    if (File.GetLastWriteTime(path) < cutoff)
+                    {
+                        File.Delete(path);
+                    }
                 }
             }
         }

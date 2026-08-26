@@ -283,8 +283,31 @@ public class MainViewModelTests : IDisposable
 
         await vm.ProcessCommand.ExecuteAsync();
 
+        // ═══ ليه مابنعدّش الجوبات هنا ═══
+        //
+        // التست ده كان بيقول Jobs.Count == 3 — جوب واحد لكل مكنة. وده كان
+        // صح لما نصيب المكنة كان بيتبعت أمر طباعة واحد كبير.
+        //
+        // من ١.٩.٦ النصيب بيتقطّع لقطع صغيرة (WorkSlicing) عشان لو مكنة
+        // وقعت في نص شغلها يبقى اللي في الشك قطعة، مش نصيب كامل. فعدد
+        // الجوبات بقى **تفصيلة داخلية** بتتغيّر مع حجم القطعة — تثبيته في
+        // تست معناه إن أي تعديل في التقطيع يكسّر تست مالوش علاقة بالمعنى.
+        //
+        // اللي مايتغيّرش ولازم يفضل محروس تلات حاجات:
+
+        // ١) مفيش نسخة ضاعت ولا اتكررت — الشرط اللي المطبعة بتدفع تمنه
         Assert.Equal(10, printer.Jobs.Sum(j => j.Copies));
-        Assert.Equal(3, printer.Jobs.Count);
+
+        // ٢) الشغل وصل المكن التلاتة فعلًا، مش اتكوّم على واحدة
+        Assert.Equal(3, printer.Jobs.Select(j => j.PrinterName).Distinct().Count());
+
+        // ٣) والقسمة فضلت عادلة: ١٠ على ٣ = ٤ و٣ و٣
+        var shares = new[] { "HP", "Canon", "Epson" }
+            .Select(name => printer.Jobs.Where(j => j.PrinterName == name).Sum(j => j.Copies))
+            .OrderBy(share => share)
+            .ToList();
+
+        Assert.Equal(new[] { 3, 3, 4 }, shares);
     }
 
     [Fact]
@@ -313,6 +336,149 @@ public class MainViewModelTests : IDisposable
         Assert.All(printer.Jobs, j => Assert.Equal(4, j.Copies));
     }
 
+    // ══════════ اختيار المكن: الوعد الجديد ══════════
+    //
+    // كل التستات دي بتشترك في حاجة واحدة: **مفيش أي مفتاح بيتظبط فيها**.
+    // ده هو المقصود منها بالظبط. لو رجع يوم وبقى لازم تظبط إعداد عشان
+    // التوزيع يشتغل، التستات دي هي اللي هتقع.
+
+    [Fact]
+    public async Task Ticking_Two_Printers_Is_Enough_To_Split_The_Work()
+    {
+        // ═══ ده البلاغ بالنص ═══
+        //
+        // "مش عارف اختار أكتر من واحدة" — من مستخدم عنده سبع طابعات
+        // والميزة شغالة قدامه، بس ورا تلات خطوات في تلات أماكن.
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready),
+            Printer("Canon", PrinterStatus.Ready));
+        var printer = new FakePrintService();
+
+        var vm = CreateViewModel(repo, printer);
+        await vm.RefreshPrintersAsync();
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        vm.Settings.TotalCopies = 10;
+
+        foreach (var p in vm.Printers)
+        {
+            p.IsSelected = true;
+        }
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Equal(10, printer.Jobs.Sum(j => j.Copies));
+        Assert.Equal(5, printer.Jobs.Where(j => j.PrinterName == "HP").Sum(j => j.Copies));
+        Assert.Equal(5, printer.Jobs.Where(j => j.PrinterName == "Canon").Sum(j => j.Copies));
+    }
+
+    [Fact]
+    public async Task Ticking_One_Printer_Sends_Everything_To_It()
+    {
+        // مكنة واحدة مالهاش حاجة تتقسّم عليها. القاعدة نفسها بتغطّي
+        // الحالتين من غير ما المستخدم يفكّر في "وضع".
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready),
+            Printer("Canon", PrinterStatus.Ready));
+        var printer = new FakePrintService();
+
+        var vm = CreateViewModel(repo, printer);
+        await vm.RefreshPrintersAsync();
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        vm.Settings.TotalCopies = 8;
+
+        foreach (var p in vm.Printers)
+        {
+            p.IsSelected = p.Name == "Canon";
+        }
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Equal(8, printer.Jobs.Sum(j => j.Copies));
+        Assert.All(printer.Jobs, j => Assert.Equal("Canon", j.PrinterName));
+    }
+
+    [Fact]
+    public async Task Asking_For_The_Full_Count_On_Every_Machine_Still_Works()
+    {
+        // الحالة النادرة: نسخة كاملة لكل فرع. بقت محتاجة علامة بدل ما
+        // كانت هي الافتراضي — بس لسه موجودة، مااتشالتش.
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready),
+            Printer("Canon", PrinterStatus.Ready));
+        var printer = new FakePrintService();
+
+        var vm = CreateViewModel(repo, printer);
+        await vm.RefreshPrintersAsync();
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        vm.Settings.TotalCopies = 6;
+        vm.SameCountOnEveryPrinter = true;
+
+        foreach (var p in vm.Printers)
+        {
+            p.IsSelected = true;
+        }
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Equal(12, printer.Jobs.Sum(j => j.Copies));
+        Assert.Equal(6, printer.Jobs.Where(j => j.PrinterName == "HP").Sum(j => j.Copies));
+        Assert.Equal(6, printer.Jobs.Where(j => j.PrinterName == "Canon").Sum(j => j.Copies));
+    }
+
+    [Fact]
+    public async Task The_Summary_Shows_The_Split_Before_Anything_Prints()
+    {
+        // المستخدم لازم يشوف القسمة **قبل** ما الورق يطلع. السطر ده
+        // بيتحسب بنفس دالة التوزيع اللي بتشتغل وقت الطباعة، فمستحيل
+        // يقول حاجة والورق يطلع حاجة تانية.
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready),
+            Printer("Canon", PrinterStatus.Ready),
+            Printer("Epson", PrinterStatus.Ready));
+
+        var vm = CreateViewModel(repo);
+        await vm.RefreshPrintersAsync();
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        vm.Settings.TotalCopies = 50;
+
+        foreach (var p in vm.Printers)
+        {
+            p.IsSelected = true;
+        }
+
+        Assert.Contains("3 مكن مختارة", vm.PrinterChoiceSummary);
+        Assert.Contains("هيتقسّم", vm.PrinterChoiceSummary);
+    }
+
+    [Fact]
+    public async Task Unticking_Everything_Still_Prints_Instead_Of_Refusing()
+    {
+        // المستخدم شال التعليم عن كل حاجة وضغط طباعة. مايصحش البرنامج
+        // يقف في وشه — بيرجع للطابعة الافتراضية ويقولها في السطر.
+        var repo = new FakePrinterRepository(
+            Printer("HP", PrinterStatus.Ready),
+            Printer("Canon", PrinterStatus.Ready));
+        var printer = new FakePrintService();
+
+        var vm = CreateViewModel(repo, printer);
+        await vm.RefreshPrintersAsync();
+        vm.AddFiles(new[] { MakeFile("a.pdf") });
+
+        foreach (var p in vm.Printers)
+        {
+            p.IsSelected = false;
+        }
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.NotEmpty(printer.Jobs);
+        Assert.Contains("مفيش مكنة معلّمة", vm.PrinterChoiceSummary);
+    }
+
     [Fact]
     public async Task Selected_Printers_Are_Saved_Into_Settings_For_Presets()
     {
@@ -324,8 +490,22 @@ public class MainViewModelTests : IDisposable
         await vm.RefreshPrintersAsync();
         vm.AddFiles(new[] { MakeFile("a.pdf") });
 
-        vm.Settings.UseMultiplePrinters = true;
+        // ═══ اتغيّر في ١.٩.٦ ═══
+        //
+        // الطابعة الافتراضية بقت **معلّمة من الأول**. قبل كده القايمة كانت
+        // بتفتح فاضية والطباعة بتروح لطابعة مالهاش أي أثر ظاهر في الواجهة —
+        // يعني الواجهة بتقول حاجة والبرنامج بيعمل حاجة تانية.
+        Assert.Equal(new[] { "HP" }, vm.Printers.Where(p => p.IsSelected).Select(p => p.Name));
+
         vm.Printers.First(p => p.Name == "Canon").IsSelected = true;
+
+        await vm.ProcessCommand.ExecuteAsync();
+
+        Assert.Equal(new[] { "HP", "Canon" }, vm.Settings.SelectedPrinters);
+
+        // وشيل التعليم بيشيلها من الحفظ كمان — الاتجاه ده كان مش متختبر
+        // خالص، وهو اللي المستخدم بيعمله لما يقفل مكنة للصيانة
+        vm.Printers.First(p => p.Name == "HP").IsSelected = false;
 
         await vm.ProcessCommand.ExecuteAsync();
 
@@ -706,11 +886,23 @@ public class MainViewModelTests : IDisposable
 
     // ══════════ استرجاع الإعدادات الافتراضية ══════════
 
+    /// <summary>كل خصايص AppSettings اللي ينفع تتكتب.</summary>
+    private static List<System.Reflection.PropertyInfo> WritableAppSettings()
+        => typeof(AppSettings).GetProperties()
+            .Where(p => p.CanRead && p.CanWrite && p.GetIndexParameters().Length == 0)
+            .ToList();
+
+    private static bool IsConnection(System.Reflection.PropertyInfo property)
+        => property.IsDefined(typeof(ConnectionSettingAttribute), inherit: true);
+
     /// <summary>
     /// التست ده حارس على باج بيتكرر بطبعه: النسخة القديمة من
     /// RestoreDefaultAppSettings كانت لستة مكتوبة بالإيد، وفعلًا نسيت خاصية
     /// جديدة فكان الزرار بيسيبها زي ما هي من غير ما حد ياخد باله. بنمشي
     /// بالـ Reflection على **كل** خاصية عشان أي حاجة تتضاف بكرة تبقى مغطّاة.
+    ///
+    /// الاستثناء الوحيد: الخصايص المعلّمة بـ ConnectionSetting. دي بتتفحص
+    /// في تست لوحدها تحت.
     /// </summary>
     [Fact]
     public void Restoring_Defaults_Resets_Every_Single_Property()
@@ -718,9 +910,7 @@ public class MainViewModelTests : IDisposable
         var vm = CreateViewModel();
         var defaults = new AppSettings();
 
-        var writable = typeof(AppSettings).GetProperties()
-            .Where(p => p.CanRead && p.CanWrite && p.GetIndexParameters().Length == 0)
-            .ToList();
+        var writable = WritableAppSettings().Where(p => !IsConnection(p)).ToList();
 
         Assert.NotEmpty(writable);
 
@@ -739,6 +929,119 @@ public class MainViewModelTests : IDisposable
 
         Assert.True(stillWrong.Count == 0,
             "خصائص مارجعتش لقيمتها الافتراضية: " + string.Join("، ", stillWrong));
+    }
+
+    /// <summary>
+    /// زرار "استعادة الإعدادات الافتراضية" مايقفلش الاستقبال.
+    ///
+    /// السبب: رجوع لون الترقيم للافتراضي بيبان في نص ثانية. قفل الاستقبال
+    /// مابيبانش خالص — البرنامج بيفضل شكله سليم والشغل الجاي من بره بيروح
+    /// في الهوا لحد ما حد يسأل "فين الملف اللي بعتّهولك؟"
+    /// </summary>
+    [Fact]
+    public void Restoring_Defaults_Leaves_The_Reception_Wiring_Alone()
+    {
+        var vm = CreateViewModel();
+
+        vm.App.ReceiveFromVirtualPrinter = true;
+        vm.App.HotFolder = @"\\SERVER\شغل";
+        vm.App.PrintReceivedAutomatically = true;
+
+        vm.RestoreDefaultAppSettingsCommand.Execute(null);
+
+        Assert.True(vm.App.ReceiveFromVirtualPrinter);
+        Assert.Equal(@"\\SERVER\شغل", vm.App.HotFolder);
+        Assert.True(vm.App.PrintReceivedAutomatically);
+    }
+
+    /// <summary>
+    /// وبيقول بالنص إن الاستقبال ماتغيرش — الصمت هنا هو اللي بيخلي الناس
+    /// تفتكر إن الزرار قفله.
+    /// </summary>
+    [Fact]
+    public void Restoring_Defaults_Says_The_Reception_Was_Left_Alone()
+    {
+        var vm = CreateViewModel();
+
+        vm.RestoreDefaultAppSettingsCommand.Execute(null);
+
+        Assert.Contains("الاستقبال", vm.StatusText);
+    }
+
+    /// <summary>
+    /// الخصايص المعلّمة كتوصيلة لازم تفضل قليلة ومقصودة.
+    ///
+    /// من غير الحارس ده، أي حد (أنا بالذات) ممكن يحل تست فاشل بإضافة
+    /// [ConnectionSetting] على الخاصية بدل ما يصلّح المشكلة — وساعتها
+    /// زرار الافتراضي يبقى مالوش لازمة من غير ما حد ياخد باله.
+    /// </summary>
+    [Fact]
+    public void Only_The_Reception_Settings_Are_Exempt_From_The_Defaults_Button()
+    {
+        var exempt = WritableAppSettings().Where(IsConnection).Select(p => p.Name).OrderBy(n => n).ToList();
+
+        Assert.Equal(
+            new[]
+            {
+                nameof(AppSettings.HotFolder),
+                nameof(AppSettings.PrintReceivedAutomatically),
+                nameof(AppSettings.ReceiveFromVirtualPrinter)
+            },
+            exempt);
+    }
+
+    // ══════════ التصفير الأحمر ══════════
+
+    /// <summary>
+    /// زرار "حذف الملفات وإرجاع الإعدادات" الأحمر مايلمسش الإعدادات العامة.
+    ///
+    /// ═══ ليه التست ده موجود ═══
+    ///
+    /// جه بلاغ من التجربة الحقيقية إن الزرار ده بيقفل مربع "استقبال من
+    /// طابعة PrintFlow". الكود مكانش بيعمل كده — بس الرسالة كانت بتقول
+    /// "اترجعت الإعدادات للوضع الافتراضي" على إطلاقها، والزرار بيمسح
+    /// اللوج اللي فيه سطر الاستقبال. الانطباع كان مفهوم تمامًا.
+    ///
+    /// التست ده بيثبّت الحدود بالأرقام مش بالكلام: أي حد يضيف بكرة سطر
+    /// في Reset بيلمس App، ده هيقع ويقوله اسم الخاصية.
+    /// </summary>
+    [Fact]
+    public void Reset_Never_Touches_The_General_Settings()
+    {
+        var vm = CreateViewModel();
+        var writable = WritableAppSettings();
+
+        // بنبعّد كل خاصية عن قيمتها الافتراضية عشان لو التصفير رجّعها نشوفه
+        var defaults = new AppSettings();
+
+        foreach (var property in writable)
+        {
+            property.SetValue(vm.App, Different(property.GetValue(defaults), property.PropertyType));
+        }
+
+        var before = writable.ToDictionary(p => p.Name, p => p.GetValue(vm.App));
+
+        vm.ResetCommand.Execute(null);
+
+        var changed = writable
+            .Where(p => !Equals(p.GetValue(vm.App), before[p.Name]))
+            .Select(p => p.Name)
+            .ToList();
+
+        Assert.True(changed.Count == 0,
+            "زرار التصفير الأحمر لمس إعدادات عامة: " + string.Join("، ", changed));
+    }
+
+    /// <summary>ورسالته بتقول بالنص إنه رجّع إيه وساب إيه.</summary>
+    [Fact]
+    public void Reset_Says_What_It_Did_Not_Touch()
+    {
+        var vm = CreateViewModel();
+
+        vm.ResetCommand.Execute(null);
+
+        Assert.Contains("الجوب", vm.StatusText);
+        Assert.Contains("الاستقبال", vm.StatusText);
     }
 
     /// <summary>بترجّع قيمة مختلفة أكيد عن اللي داخلة، مهما كان نوعها.</summary>
@@ -847,14 +1150,15 @@ public class MainViewModelTests : IDisposable
 
         public List<PrintJob> Jobs { get; } = new();
 
-        public Task<string> PrintAsync(PrintJob job, CancellationToken cancellationToken = default)
+        public Task<PrintOutcome> PrintAsync(PrintJob job, CancellationToken cancellationToken = default)
         {
             lock (_gate)
             {
                 Jobs.Add(job);
             }
 
-            return Task.FromResult($"[نجاح] {job.Copies} نسخة إلى {job.PrinterName}");
+            return Task.FromResult(
+                PrintOutcome.Delivered($"[نجاح] {job.Copies} نسخة إلى {job.PrinterName}"));
         }
     }
 }

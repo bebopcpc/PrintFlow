@@ -83,8 +83,10 @@ public static class ProcessedFileNaming
     /// <c>C:\a\فاتورة.pdf</c> بيرجع كله كاسم ملف لو الكود اتنفذ على لينكس.
     /// التستات بتجري على الاتنين، والنتيجة لازم تبقى واحدة.
     /// </summary>
-    private static string StemOf(string path)
+    public static string StemOf(string path)
     {
+        ArgumentNullException.ThrowIfNull(path);
+
         int lastSeparator = path.LastIndexOfAny(['\\', '/']);
         string fileName = lastSeparator >= 0 ? path[(lastSeparator + 1)..] : path;
 

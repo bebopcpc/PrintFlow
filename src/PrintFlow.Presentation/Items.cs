@@ -13,10 +13,27 @@ public sealed class PdfFileItem : ObservableObject
         ModifiedUtc = modifiedUtc;
     }
 
+    /// <summary>مسار الملف اللي السلسلة بتشتغل عليه — دايمًا PDF.</summary>
     public string FullPath { get; }
+
+    /// <summary>
+    /// المسار اللي المستخدم اختاره فعلًا. بيساوي <see cref="FullPath"/> إلا
+    /// في الصور: ساعتها ده مسار الصورة الأصلية والـ FullPath هو الـ PDF
+    /// المحوّل.
+    ///
+    /// مهم لمنع التكرار: من غيره، لو المستخدم رمى نفس الصورة مرتين كان
+    /// هيتعمل تحويلين بأسامي مختلفة والاتنين يدخلوا القايمة.
+    /// </summary>
+    public string SourcePath { get; init; } = "";
+
     public string FileName { get; }
     public long SizeBytes { get; }
     public DateTime ModifiedUtc { get; }
+
+    /// <summary>أصله صورة اتحوّلت لـ PDF؟</summary>
+    public bool WasConverted =>
+        SourcePath.Length > 0 &&
+        !string.Equals(SourcePath, FullPath, StringComparison.OrdinalIgnoreCase);
 
     private int? _pageCount;
     /// <summary>عدد الصفحات — بيتملى بعدين، محتاج قراءة الملف.</summary>
@@ -36,9 +53,16 @@ public sealed class PdfFileItem : ObservableObject
         ? $"{SizeBytes / 1024d / 1024d:0.#} م.ب"
         : $"{SizeBytes / 1024d:0.#} ك.ب";
 
+    /// <summary>
+    /// الاسم اللي بيظهر للمستخدم. للصور بنعرض اسم **الصورة الأصلية** مش
+    /// الـ PDF المحوّل — هو رمى "فاتورة.jpg" ومش المفروض يدوّر عليها في
+    /// القايمة تحت اسم تاني.
+    /// </summary>
+    private string ShownName => WasConverted ? Path.GetFileName(SourcePath) : FileName;
+
     public string DisplayText => PageCount is int pages
-        ? $"{FileName}  —  {pages} صفحة  —  {SizeText}"
-        : $"{FileName}  —  {SizeText}";
+        ? $"{ShownName}{(WasConverted ? " ← PDF" : "")}  —  {pages} صفحة  —  {SizeText}"
+        : $"{ShownName}{(WasConverted ? " ← PDF" : "")}  —  {SizeText}";
 }
 
 /// <summary>
@@ -103,7 +127,21 @@ public sealed class PrinterItem : ObservableObject
         set => SetProperty(ref _isSelected, value);
     }
 
-    public bool IsEligible => Status != PrinterStatus.Offline && Status != PrinterStatus.Error;
+    /// <summary>
+    /// دي طابعة PrintFlow الوهمية نفسها؟
+    ///
+    /// **ليه ده مهم:** الطابعة الوهمية بتكتب في مجلد البرنامج، والبرنامج
+    /// بيراقب المجلد ده. لو البرنامج طبع عليها، الجوب بيرجعله تاني —
+    /// وفي وضع الطباعة التلقائية بتبقى حلقة لا نهائية بتاكل القرص.
+    ///
+    /// وده مش احتمال نظري: بعد ما الطابعة اتسطّبت بقت **الافتراضية** على
+    /// الجهاز، والبرنامج بيبدأ على الافتراضية — فبقت هدف الطباعة لوحدها.
+    /// </summary>
+    public bool IsVirtualPrintFlow =>
+        string.Equals(Name, VirtualPrinter.PrinterName, StringComparison.OrdinalIgnoreCase);
+
+    public bool IsEligible =>
+        Status != PrinterStatus.Offline && Status != PrinterStatus.Error && !IsVirtualPrintFlow;
 
     public string StatusText => Status switch
     {
@@ -117,6 +155,11 @@ public sealed class PrinterItem : ObservableObject
     {
         get
         {
+            if (IsVirtualPrintFlow)
+            {
+                return $"{Name} — دي طابعة الاستقبال، مش هدف للطباعة";
+            }
+
             string defaultTag = IsDefault ? " (افتراضية)" : "";
             string port = string.IsNullOrWhiteSpace(Port) ? "" : $" — {Port}";
             return $"{Name}{defaultTag} — {StatusText}{port}";

@@ -119,8 +119,160 @@ public class JsonSettingsStoreTests : IDisposable
     {
         _store.Save(new AppSettings());
 
-        Assert.False(File.Exists(_store.SettingsPath + ".tmp"));
+        // بنسأل عن **أي** ملف .tmp مش عن اسم معيّن. النسخة القديمة كانت
+        // بتسأل عن "settings.json.tmp" بالحرف، فأول ما الاسم المؤقت اتغيّر
+        // التست كان هيعدّي على الفاضي من غير ما يفحص حاجة.
+        Assert.Empty(Directory.GetFiles(_folder, "*.tmp"));
         Assert.True(File.Exists(_store.SettingsPath));
+    }
+
+    [Fact]
+    public void Saving_From_Many_Threads_At_Once_Never_Corrupts_The_File()
+    {
+        // ═══ التاريخ ═══
+        //
+        // التست ده اتكتب عشان الاسم المؤقت الثابت (settings.json.tmp):
+        // نسختين من البرنامج كانوا بيكتبوا في نفس الملف.
+        //
+        // وأول ما اشتغل على ويندوز وقع على حاجة تانية خالص — مش الكتابة،
+        // النقل:
+        //
+        //   UnauthorizedAccessException at System.IO.FileSystem.MoveFile
+        //
+        // يعني الاسم الفريد حل نص المشكلة بس. MoveFileEx بترفض لو الملف
+        // الهدف مفتوح عند حد، والخيوط كانت بتستبدل نفس الملف في نفس
+        // اللحظة.
+        //
+        // الإصلاح جزئين: قفل جوه العملية (بيشيل الحالة دي من أصلها)،
+        // وإعادة محاولة (للي بره العملية — نسخة تانية، مضاد فيروسات،
+        // فهرسة ويندوز).
+        var stores = Enumerable.Range(0, 4).Select(_ => new JsonSettingsStore(_folder)).ToList();
+
+        Parallel.ForEach(stores, store =>
+        {
+            for (int i = 0; i < 25; i++)
+            {
+                store.Save(new AppSettings { WatermarkFontSize = 12 + i });
+            }
+        });
+
+        Assert.Empty(Directory.GetFiles(_folder, "*.tmp"));
+
+        // بيتقري ومش رايح للافتراضي (يعني الملف مش بايظ)
+        Assert.NotEqual(new AppSettings().WatermarkFontSize, _store.Load().WatermarkFontSize);
+    }
+
+    [Fact]
+    public void A_Blocked_Replace_Is_Retried_Until_It_Works()
+    {
+        // بنسدّ السكة بطريقة بتشتغل على ويندوز ولينكس الاتنين: بنحط
+        // **مجلد** مكان ملف الإعدادات. النقل فوق مجلد بيفشل دايمًا —
+        // UnauthorizedAccessException على ويندوز وIOException على لينكس،
+        // والاتنين في قايمة "يستاهل إعادة محاولة".
+        //
+        // ده التست الوحيد اللي بيثبت إن JsonSettingsStore **بيستخدم**
+        // FileReplace فعلًا. تستات FileReplace نفسها بتفحص الأرقام بس.
+        //
+        // ⚠ السطر اللي تحت مش زيادة: أول نداء لـ JsonSerializer في العملية
+        // بياخد ١٠٠ مللي+ في الـ JIT. من غير التسخين ده، التسلسل بياخد
+        // وقت أطول من السد نفسه — فالنقل بيتنفذ بعد ما السد يتشال
+        // والتست بيعدّي حتى من غير أي إعادة محاولة. اتكشف بالتخريب.
+        _store.Save(new AppSettings { WatermarkFontSize = 5 });
+
+        File.Delete(_store.SettingsPath);
+        Directory.CreateDirectory(_store.SettingsPath);
+        File.WriteAllText(Path.Combine(_store.SettingsPath, "بتاعنا.txt"), "سد");
+
+        var saving = Task.Run(() => _store.Save(new AppSettings { WatermarkFontSize = 37 }));
+
+        // نسيب أول محاولات تفشل فعلًا وبعدين نفتح السكة. الميزانية
+        // (شوف FileReplace) أكبر من ٥٠ مللي بمراحل.
+        Thread.Sleep(50);
+        Directory.Delete(_store.SettingsPath, recursive: true);
+
+        saving.GetAwaiter().GetResult();
+
+        Assert.Equal(37, _store.Load().WatermarkFontSize);
+        Assert.Empty(Directory.GetFiles(_folder, "*.tmp"));
+    }
+
+    [Fact]
+    public void A_Permanent_Block_Gives_Up_Instead_Of_Hanging()
+    {
+        // لو السكة مسدودة للأبد، مايصحش البرنامج يفضل يحاول لحد الأبد.
+        // بيقول الحقيقة، والملف القديم بيفضل سليم.
+        _store.Save(new AppSettings { WatermarkFontSize = 21 });
+
+        File.Delete(_store.SettingsPath);
+        Directory.CreateDirectory(_store.SettingsPath);
+        File.WriteAllText(Path.Combine(_store.SettingsPath, "سد.txt"), "سد");
+
+        try
+        {
+            Assert.ThrowsAny<Exception>(
+                () => _store.Save(new AppSettings { WatermarkFontSize = 99 }));
+
+            Assert.Empty(Directory.GetFiles(_folder, "*.tmp"));
+        }
+        finally
+        {
+            Directory.Delete(_store.SettingsPath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_Busy_Settings_File_Is_Waited_Out_Not_Given_Up_On()
+    {
+        // بنقلّد بالظبط اللي مضاد الفيروسات وWindows Search بيعملوه:
+        // بيفتحوا الملف لجزء من الثانية بعد ما يتكتب.
+        //
+        // ⚠ صدق مع النفس: التست ده بيعض على **ويندوز** بس. هناك القفل
+        // إجباري، فالنقل بيرفض والإعادة هي اللي بتنقذ الموقف. على لينكس
+        // مفيش قفل إجباري — النقل بينجح من أول مرة والتست بيعدّي من غير
+        // ما يفحص الإعادة أصلًا. الميزة إن ده بالظبط الجهاز اللي البلاغ
+        // جه منه.
+        //
+        // الحفظ ده بيسخّن الـ JIT كمان قبل التوقيت الحساس (شوف التست
+        // اللي فوق) — أول تسلسل في العملية بياخد ١٠٠ مللي+.
+        _store.Save(new AppSettings { WatermarkFontSize = 11 });
+        _store.Save(new AppSettings { WatermarkFontSize = 11 });
+
+        var holder = new FileStream(
+            _store.SettingsPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        try
+        {
+            var saving = Task.Run(() => _store.Save(new AppSettings { WatermarkFontSize = 44 }));
+
+            // نسيب المحاولات الأولى تفشل فعلًا، وبعدين نفتح السكة.
+            // الميزانية أكبر من ٥٠ مللي بكتير (شوف FileReplace)، فمفيش
+            // سباق هنا حتى على جهاز بطيء.
+            Thread.Sleep(50);
+            holder.Dispose();
+
+            saving.GetAwaiter().GetResult();
+        }
+        finally
+        {
+            holder.Dispose();
+        }
+
+        Assert.Equal(44, _store.Load().WatermarkFontSize);
+        Assert.Empty(Directory.GetFiles(_folder, "*.tmp"));
+    }
+
+    [Fact]
+    public void Saving_Many_Times_In_A_Row_Stays_Readable()
+    {
+        // الحفظ بقى لحظي في ١.٩.٥ — يعني الكتابة بتحصل أكتر بكتير من
+        // الأول. لازم نتأكد إن التكرار مابيخلّفش زبالة ولا ملف نص كتابة.
+        for (int size = 10; size <= 60; size++)
+        {
+            _store.Save(new AppSettings { WatermarkFontSize = size });
+        }
+
+        Assert.Empty(Directory.GetFiles(_folder, "*.tmp"));
+        Assert.Equal(60, _store.Load().WatermarkFontSize);
     }
 
     // ══════════ الإعدادات المسبقة ══════════

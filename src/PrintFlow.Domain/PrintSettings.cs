@@ -30,7 +30,10 @@ public sealed class PrintSettings : ObservableObject
     }
 
     private bool _saveConvertedToPdf;
-    /// <summary>حفظ الملفات المحوّلة لـ PDF (Word/PPT) — لسه مش مبنية.</summary>
+    /// <summary>
+    /// حفظ نسخة دايمة من الصور اللي اتحوّلت لـ PDF في مجلد الإخراج.
+    /// مقفولة = التحويل بيروح للتيمب وبيتمسح بعد أيام.
+    /// </summary>
     public bool SaveConvertedToPdf
     {
         get => _saveConvertedToPdf;
@@ -46,7 +49,16 @@ public sealed class PrintSettings : ObservableObject
     }
 
     private CompressionMode _compression = CompressionMode.None;
-    /// <summary>مستوى ضغط الملفات — لسه مش مبني.</summary>
+    /// <summary>
+    /// مستوى ضغط الملفات — **لسه مقفول**.
+    ///
+    /// اتقاس فعليًا قبل ما يتبني: إعادة حفظ الـ PDF بـ PdfSharp بتوفّر صفر
+    /// تقريبًا (وأحيانًا بتكبّر الملف)، لأن الـ PDF أصلًا مضغوط. حتى الضغط
+    /// الهيكلي الكامل بـ qpdf طلع ٠.٧٪ بس على المستندات الممسوحة — وهي
+    /// أصلًا أتقل نوع. الوزن كله في الصور، والتوفير الحقيقي (٤٥-٧٠٪) بيجي
+    /// من تصغير دقتها، وده محتاج أداة خارجية. الخاصية سايبة عشان الإعداد
+    /// يفضل متحفوظ في الـ Preset، بس الواجهة مقفولة.
+    /// </summary>
     public CompressionMode Compression
     {
         get => _compression;
@@ -54,7 +66,11 @@ public sealed class PrintSettings : ObservableObject
     }
 
     private bool _deletePages;
-    /// <summary>تفعيل حذف صفحات محددة من كل ملف — لسه مش مبني.</summary>
+    /// <summary>
+    /// تفعيل حذف صفحات محددة **من كل ملف داخل على حدة**.
+    /// النص بيفضل في <see cref="PagesToDelete"/> لما ده يتقفل، عشان المستخدم
+    /// ما يضطرش يكتبه تاني — والعلامة دي هي اللي بتقرر.
+    /// </summary>
     public bool DeletePages
     {
         get => _deletePages;
@@ -207,8 +223,23 @@ public sealed class PrintSettings : ObservableObject
         set => SetProperty(ref _useMultiplePrinters, value);
     }
 
-    private bool _distributeCopies;
-    /// <summary>توزيع إجمالي النسخ على الطابعات بدل ما كل طابعة تطبع العدد كامل.</summary>
+    private bool _distributeCopies = true;
+    /// <summary>
+    /// توزيع إجمالي النسخ على المكن المعلّمة بدل ما كل مكنة تطبع العدد كامل.
+    ///
+    /// ═══ بقى true من ١.٩.٦ ═══
+    ///
+    /// كان false، يعني المستخدم لازم يدوّر على مربع ويعلّم عليه عشان
+    /// التوزيع يشتغل. ودي كانت المشكلة بالظبط: البرنامج اتعمل أصلًا عشان
+    /// المطبعة توزّع الشغل على المكن، فالحالة الطبيعية كانت مقفولة
+    /// افتراضيًا ووراها خطوة مخفية.
+    ///
+    /// دلوقتي التوزيع هو الأصل: علّم على مكنتين يتقسّم عليهم. والحالة
+    /// النادرة (كل مكنة تطلّع النسخ كاملة — نسخة لكل فرع مثلًا) هي اللي
+    /// بقت محتاجة علامة.
+    ///
+    /// ملحوظة: ده مالوش أي أثر على مكنة واحدة — مافيش حاجة تتقسّم أصلًا.
+    /// </summary>
     public bool DistributeCopies
     {
         get => _distributeCopies;

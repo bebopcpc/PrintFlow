@@ -100,3 +100,27 @@ public sealed class ContentPositionToAlignmentConverter : IValueConverter
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
         => Binding.DoNothing;
 }
+
+/// <summary>
+/// بيلوّن سطر الوصف: أحمر لو تحذير، رمادي لو معلومة عادية.
+///
+/// موجود عشان التحذير اللي بيقول "الدمج شغّال فالتوزيع مش هيعمل اللي إنت
+/// متوقعه" لازم يبان مختلف عن باقي الأسطر الرمادية، وإلا هيعدّي في وسطهم.
+/// </summary>
+public sealed class WarningBrushConverter : IValueConverter
+{
+    private static readonly SolidColorBrush Warning = new(Color.FromRgb(0xC0, 0x39, 0x2B));
+    private static readonly SolidColorBrush Normal = new(Color.FromRgb(0x8A, 0x93, 0xA6));
+
+    static WarningBrushConverter()
+    {
+        Warning.Freeze();
+        Normal.Freeze();
+    }
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => value is true ? Warning : Normal;
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}

@@ -338,7 +338,7 @@ public class PresetCommandsTests
 
     private sealed class StubPrintService : IPdfPrintService
     {
-        public Task<string> PrintAsync(PrintJob job, CancellationToken cancellationToken = default)
-            => Task.FromResult("ok");
+        public Task<PrintOutcome> PrintAsync(PrintJob job, CancellationToken cancellationToken = default)
+            => Task.FromResult(PrintOutcome.Delivered("ok"));
     }
 }

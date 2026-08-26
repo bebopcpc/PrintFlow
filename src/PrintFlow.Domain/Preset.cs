@@ -12,7 +12,13 @@ public sealed class Preset
 
     public PrintSettings Settings { get; set; } = new();
 
-    /// <summary>وصف مختصر يتعرض جنب الاسم عشان المستخدم يعرف الـ Preset ده بيعمل إيه.</summary>
+    /// <summary>
+    /// وصف مختصر يتعرض جنب الاسم عشان المستخدم يعرف الـ Preset ده بيعمل إيه.
+    ///
+    /// **لازم يذكر أي إعداد بيغيّر شكل الورق.** ده الكلام اللي بيقراه قبل
+    /// ما يضغط تحميل؛ لو كتم إن الإعداد فيه كتيّب أو ٤ شرائح أو حذف صفحات،
+    /// هو هيحمّله فاكر إنه إعداد طباعة عادي والورق هيطلع حاجة تانية خالص.
+    /// </summary>
     public string Summarize()
     {
         var parts = new List<string>
@@ -35,6 +41,33 @@ public sealed class Preset
         if (Settings.NumberPagesPerFile)
         {
             parts.Add("ترقيم");
+        }
+
+        // ══ اللي بيغيّر شكل الورق ══
+
+        if (Settings.BookletMode)
+        {
+            // الكتيّب بيتجاهل عدد الشرائح، فماينفعش نقول الاتنين
+            parts.Add("كتيّب");
+        }
+        else if (Settings.SlidesPerSheet > 1)
+        {
+            parts.Add($"{Settings.SlidesPerSheet} شرائح");
+        }
+
+        if (Settings.DeletePages && !string.IsNullOrWhiteSpace(Settings.PagesToDelete))
+        {
+            parts.Add($"حذف ({Settings.PagesToDelete})");
+        }
+
+        if (Settings.ScalePercent != 100)
+        {
+            parts.Add($"مقياس {Settings.ScalePercent}%");
+        }
+
+        if (!Settings.MergeFiles)
+        {
+            parts.Add("من غير دمج");
         }
 
         if (Settings.UseMultiplePrinters)

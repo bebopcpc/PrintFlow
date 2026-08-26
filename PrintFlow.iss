@@ -3,7 +3,7 @@
 ; العربي غلط ويطلع رموز زي ����� (ده اللي كان حاصل في النسخة القديمة).
 
 #define AppName "PrintFlow"
-#define AppVersion "1.6.0"
+#define AppVersion "1.9.9"
 ; غيّر الناشر لاسمك أو اسم المطبعة — SwiftByte شركة تانية
 #define AppPublisher "PrintFlow"
 #define AppExe "PrintFlow.UI.exe"

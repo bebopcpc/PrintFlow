@@ -261,7 +261,7 @@ public class SlidePreviewTests
 
     private sealed class StubPrint : IPdfPrintService
     {
-        public Task<string> PrintAsync(PrintJob job, CancellationToken cancellationToken = default)
-            => Task.FromResult("ok");
+        public Task<PrintOutcome> PrintAsync(PrintJob job, CancellationToken cancellationToken = default)
+            => Task.FromResult(PrintOutcome.Delivered("ok"));
     }
 }
