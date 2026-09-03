@@ -133,6 +133,39 @@ public class PrintSettingsTests
         Assert.Equal(1, settings.TotalCopies);
         Assert.Contains(nameof(PrintSettings.TotalCopies), raised);
     }
+    
+    /// <summary>
+    /// ⚠ الحد الأعلى لعدد النسخ.
+    ///
+    /// من غيره، «١٠٠» اللي اتكتبت «١٠٠٠٠٠٠» بالغلط بتتحوّل لملايين وحدات
+    /// شغل في <c>WorkloadBalancer.Balance</c> — البرنامج بيتجمّد والمستخدم
+    /// مش عارف ليه.
+    ///
+    /// والإشعار لازم يتبعت، عشان الخانة في الواجهة تعرض الرقم المقصوص
+    /// بدل ما تفضل مكتوب فيها اللي المستخدم كتبه.
+    /// </summary>
+    [Fact]
+    public void A_Mistyped_Copy_Count_Is_Capped()
+    {
+        var settings = new PrintSettings();
+
+        var raised = new List<string?>();
+        ((INotifyPropertyChanged)settings).PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        settings.TotalCopies = 1_000_000;
+
+        Assert.Equal(PrintSettings.MaximumCopies, settings.TotalCopies);
+        Assert.Contains(nameof(PrintSettings.TotalCopies), raised);
+    }
+
+    /// <summary>الأوردر الكبير الحقيقي لازم يعدّي زي ما هو — الحد مش مفروض يوقف شغل.</summary>
+    [Fact]
+    public void A_Big_But_Real_Order_Is_Not_Touched()
+    {
+        var settings = new PrintSettings { TotalCopies = 5_000 };
+
+        Assert.Equal(5_000, settings.TotalCopies);
+    }
 
     [Theory]
     [InlineData(5, 10)]

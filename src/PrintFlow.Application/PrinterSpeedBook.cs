@@ -45,16 +45,16 @@ namespace PrintFlow.Application;
 public sealed class PrinterSpeedBook
 {
     /// <summary>أقل عدد صفحات نصدّق عنده قياس.</summary>
-    public const int MinimumPages = 20;
+    public const int MinimumPages = 100;
 
     /// <summary>وزن القياس الجديد جنب المحفوظ. الباقي للقديم.</summary>
     public const double NewSampleWeight = 0.30;
 
     /// <summary>حدود العقل: أقل وأكتر سرعة نقبلها، عشان قياس شاذ مايتسجّلش.</summary>
     private const double SlowestBelievable = 0.02;
-    private const double FastestBelievable = 200d;
+    private const double FastestBelievable = 10d;
 
-    private static readonly TimeSpan MinimumSpan = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan MinimumSpan = TimeSpan.FromSeconds(60);
 
     private readonly Lock _gate = new();
     private readonly Dictionary<string, double> _known = new(StringComparer.OrdinalIgnoreCase);

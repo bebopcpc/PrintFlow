@@ -205,14 +205,32 @@ public sealed class PrintSettings : ObservableObject
     public int ScalePercent
     {
         get => _scalePercent;
-        set => SetProperty(ref _scalePercent, value, v => Math.Clamp(v, 10, 400));
+        set => SetProperty(ref _scalePercent, value, PageScaling.Clamp);
     }
+
+    /// <summary>
+    /// أكبر عدد نسخ مقبول في الأوردر الواحد.
+    ///
+    /// ═══ ليه في حد أصلًا ═══
+    ///
+    /// من غير حد أعلى، غلطة كتابة واحدة بتقفل البرنامج. الرقم ده بيتضرب
+    /// في عدد الملفات وبيتحوّل لوحدات شغل حقيقية في الذاكرة — شوف
+    /// <c>WorkloadBalancer.Balance</c> وهي بتحجز
+    /// <c>documents.Count * copiesPerDocument</c> مقدّمًا.
+    ///
+    /// ٥ ملفات × مليون نسخة = ٥ مليون وحدة. البرنامج بيتجمّد أو بيموت،
+    /// والمستخدم مش فاهم إن كل اللي حصل إنه زوّد صفرين.
+    ///
+    /// ١٠٬٠٠٠ أوسع من أي أوردر حقيقي في المطبعة، فمش هيوقف شغل صح — بس
+    /// بيمسك الأصفار الزيادة.
+    /// </summary>
+    public const int MaximumCopies = 10_000;
 
     private int _totalCopies = 1;
     public int TotalCopies
     {
         get => _totalCopies;
-        set => SetProperty(ref _totalCopies, value, v => v < 1 ? 1 : v);
+        set => SetProperty(ref _totalCopies, value, v => Math.Clamp(v, 1, MaximumCopies));
     }
         private int _pageFrom;
     /// <summary>

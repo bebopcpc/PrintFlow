@@ -29,12 +29,20 @@ public sealed record PrintJob
     public PageOrientation Orientation { get; init; } = PageOrientation.Portrait;
 
     /// <summary>
-    /// عدد صفحات المستند. مالوش أي أثر على أمر الطباعة نفسه —
-    /// بنستخدمه بس عشان نحسب مهلة انتظار معقولة للجوب (SpoolTimeoutPolicy).
+    /// عدد صفحات المستند. مابيتبعتش للطابعة في أمر الطباعة نفسه.
+    ///
+    /// ⚠ بس مالوش «أثر صفر» زي ما التعليق ده كان بيقول — بيتحسب عليه
+    /// حاجتين:
+    ///
+    ///   • مهلة انتظار الجوب (<c>SpoolTimeoutPolicy</c>)
+    ///   • <see cref="PagesPerCopy"/> تحت على طول — وهي اللي التقسيم
+    ///     لدفعات بيتبني عليها
+    ///
     /// صفر معناها مش معروف.
     /// </summary>
     public int PageCount { get; init; }
-        /// <summary>
+
+    /// <summary>
     /// أول صفحة تتطبع. صفر = من أول المستند. شوف <see cref="PageRange"/>.
     /// </summary>
     public int FirstPage { get; init; }

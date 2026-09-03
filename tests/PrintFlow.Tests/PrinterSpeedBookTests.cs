@@ -47,13 +47,13 @@ public class PrinterSpeedBookTests
         var (book, clock, _) = NewBook();
 
         book.OrderStarted();
-        book.NoteDelivered("HP", 100);
-        clock.Advance(50);
+        book.NoteDelivered("HP", 200);
+        clock.Advance(100);
 
         string learned = book.OrderFinished();
 
         Assert.Contains("HP", learned);
-        Assert.Equal(2d, book.Snapshot().For("HP"), 3);   // ١٠٠ صفحة ÷ ٥٠ ثانية
+        Assert.Equal(2d, book.Snapshot().For("HP"), 3);   // ٢٠٠ صفحة ÷ ١٠٠ ثانية
     }
 
     /// <summary>
@@ -79,11 +79,11 @@ public class PrinterSpeedBookTests
         book.OrderStarted();
 
         // البرّاقة: شغل كتير بدري وبعدين وقفت
-        book.NoteDelivered("Burst", 57);
+        book.NoteDelivered("Burst", 120);
         clock.Advance(11);
 
         // الشغّالة: فضلت شغالة لآخر الأوردر
-        book.NoteDelivered("Steady", 399);
+        book.NoteDelivered("Steady", 840);
         clock.Advance(240);
 
         book.OrderFinished();
@@ -107,7 +107,7 @@ public class PrinterSpeedBookTests
 
         book.OrderStarted();
         book.NoteDelivered("HP", PrinterSpeedBook.MinimumPages - 1);
-        clock.Advance(30);
+        clock.Advance(120);
 
         Assert.Empty(book.OrderFinished());
         Assert.True(book.Snapshot().IsEmpty);
@@ -125,7 +125,7 @@ public class PrinterSpeedBookTests
         book.OrderStarted();
         book.NoteDelivered("HP", 500);
         book.Distrust("HP");
-        clock.Advance(60);
+        clock.Advance(120);
 
         book.OrderFinished();
 
@@ -157,26 +157,26 @@ public class PrinterSpeedBookTests
     {
         var (book, clock, _) = NewBook();
 
-        // أوردر أول: ١٠٠ صفحة ÷ ٥٠ ثانية = ٢ ص/ث
+        // أوردر أول: ٢٠٠ صفحة ÷ ١٠٠ ثانية = ٢ ص/ث
         book.OrderStarted();
-        book.NoteDelivered("HP", 100);
-        clock.Advance(50);
+        book.NoteDelivered("HP", 200);
+        clock.Advance(100);
         book.OrderFinished();
 
-        // أوردر تاني شاذ: ١٠٠ صفحة ÷ ١٠ ثواني = ١٠ ص/ث
+        // أوردر تاني شاذ: ٦٤٠ صفحة ÷ ٨٠ ثانية = ٨ ص/ث
         book.OrderStarted();
-        book.NoteDelivered("HP", 100);
-        clock.Advance(10);
+        book.NoteDelivered("HP", 640);
+        clock.Advance(80);
         book.OrderFinished();
 
         double blended = book.Snapshot().For("HP");
         double expected = (2d * (1 - PrinterSpeedBook.NewSampleWeight))
-                          + (10d * PrinterSpeedBook.NewSampleWeight);
+                          + (8d * PrinterSpeedBook.NewSampleWeight);
 
         Assert.Equal(expected, blended, 3);
 
         // والأهم: مانطّش على الرقم الجديد
-        Assert.True(blended < 10d);
+        Assert.True(blended < 8d);
         Assert.True(blended > 2d);
     }
 
@@ -188,8 +188,8 @@ public class PrinterSpeedBookTests
         var (book, clock, folder) = NewBook();
 
         book.OrderStarted();
-        book.NoteDelivered("HP", 100);
-        clock.Advance(50);
+        book.NoteDelivered("HP", 200);
+        clock.Advance(100);
         book.OrderFinished();
 
         // كتاب جديد على نفس المجلد = زي ما البرنامج اتقفل واتفتح
@@ -206,8 +206,8 @@ public class PrinterSpeedBookTests
         var (book, clock, _) = NewBook();
 
         book.OrderStarted();
-        book.NoteDelivered("HP", 100);
-        clock.Advance(50);
+        book.NoteDelivered("HP", 200);
+        clock.Advance(100);
         book.OrderFinished();
 
         book.Forget();
@@ -225,15 +225,15 @@ public class PrinterSpeedBookTests
         var (book, clock, _) = NewBook();
 
         book.OrderStarted();
-        book.NoteDelivered("HP", 100);
-        clock.Advance(50);
+        book.NoteDelivered("HP", 200);
+        clock.Advance(100);
         book.OrderFinished();
 
         var snapshot = book.Snapshot();
 
         book.OrderStarted();
-        book.NoteDelivered("HP", 1000);
-        clock.Advance(10);
+        book.NoteDelivered("HP", 900);
+        clock.Advance(100);
         book.OrderFinished();
 
         Assert.Equal(2d, snapshot.For("HP"), 3);
@@ -249,14 +249,14 @@ public class PrinterSpeedBookTests
         var (book, clock, _) = NewBook();
 
         book.OrderStarted();
-        book.NoteDelivered("HP", 100);
-        clock.Advance(50);
+        book.NoteDelivered("HP", 200);
+        clock.Advance(100);
         book.OrderFinished();
 
         // أوردر تاني، المكنة دي ماشتغلتش فيه خالص
         book.OrderStarted();
-        book.NoteDelivered("Other", 100);
-        clock.Advance(50);
+        book.NoteDelivered("Other", 200);
+        clock.Advance(100);
         book.OrderFinished();
 
         // رقمها لازم يفضل زي ما هو، ماتأثرش بأوردر ماشتغلتش فيه

@@ -25,30 +25,42 @@ namespace PrintFlow.Infrastructure;
 /// </summary>
 public sealed class WmiPrinterQueue : IPrinterQueue
 {
-    public PrinterQueueState Read(string printerName)
+        public PrinterQueueState Read(string printerName)
     {
         if (string.IsNullOrWhiteSpace(printerName))
         {
             return PrinterQueueState.Idle;
         }
 
+        // ⚠ من غير WHERE ... LIKE عن قصد — شوف تعليق الكلاس فوق.
+        string prefix = printerName + ",";
+
         try
         {
-            // نفس التهريب المستخدم في باقي استعلامات WMI في المشروع.
-            string escaped = printerName.Replace("'", "''").Replace("\\", "\\\\");
-
             using var searcher = new ManagementObjectSearcher(
-                "SELECT TotalPages, PagesPrinted FROM Win32_PrintJob " +
-                $"WHERE Name LIKE '{escaped},%'");
+                "SELECT Name, TotalPages, PagesPrinted FROM Win32_PrintJob");
+
+            // ⚠ Get() بترجّع مجموعة لازم تتقفل — من غير كده بنسرّب
+            // مقبض COM كل نداء، والنداء ده بيحصل كل ثانية وإحنا بنطبع.
+            using var results = searcher.Get();
 
             int jobs = 0;
             int printed = 0;
             int total = 0;
 
-            foreach (var job in searcher.Get())
+            foreach (var job in results)
             {
                 using (job)
                 {
+                    string name = job["Name"] as string ?? string.Empty;
+
+                    // نفس المقارنة اللي LIKE كانت بتعملها (مش حساسة لحالة
+                    // الحروف) — بس من غير أي حرف بدل.
+                    if (!name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
                     jobs++;
                     total += ReadInt(job, "TotalPages");
                     printed += ReadInt(job, "PagesPrinted");
@@ -64,26 +76,33 @@ public sealed class WmiPrinterQueue : IPrinterQueue
             return PrinterQueueState.Idle;
         }
     }
-        public int CancelAll(string printerName)
+         public int CancelAll(string printerName)
     {
         if (string.IsNullOrWhiteSpace(printerName))
         {
             return 0;
         }
 
+        string prefix = printerName + ",";
         int removed = 0;
 
         try
         {
-            string escaped = printerName.Replace("'", "''").Replace("\\", "\\\\");
+            // ⚠ SELECT * مقصودة هنا — Delete() محتاجة مسار الكائن كامل.
+            using var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_PrintJob");
+            using var results = searcher.Get();
 
-            using var searcher = new ManagementObjectSearcher(
-                $"SELECT * FROM Win32_PrintJob WHERE Name LIKE '{escaped},%'");
-
-            foreach (ManagementObject job in searcher.Get().Cast<ManagementObject>())
+            foreach (ManagementObject job in results.Cast<ManagementObject>())
             {
                 using (job)
                 {
+                    string name = job["Name"] as string ?? string.Empty;
+
+                    if (!name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
                     try
                     {
                         job.Delete();
@@ -104,7 +123,6 @@ public sealed class WmiPrinterQueue : IPrinterQueue
 
         return removed;
     }
-
     private static int ReadInt(ManagementBaseObject source, string property)
     {
         try
