@@ -214,6 +214,27 @@ public sealed class PrintSettings : ObservableObject
         get => _totalCopies;
         set => SetProperty(ref _totalCopies, value, v => v < 1 ? 1 : v);
     }
+        private int _pageFrom;
+    /// <summary>
+    /// أول صفحة تتطبع من كل مستند. **صفر = من أول المستند.**
+    ///
+    /// بيشتغل وقت الطباعة بس — المستند مابيتغيّرش والترقيم بيفضل زي ما
+    /// هو، على عكس "حذف الصفحات" اللي بيعيد الترقيم من ١.
+    /// شوف <see cref="PageRange"/>.
+    /// </summary>
+    public int PageFrom
+    {
+        get => _pageFrom;
+        set => SetProperty(ref _pageFrom, value, v => v < 0 ? 0 : v);
+    }
+
+    private int _pageTo;
+    /// <summary>آخر صفحة تتطبع من كل مستند. **صفر = لآخر المستند.**</summary>
+    public int PageTo
+    {
+        get => _pageTo;
+        set => SetProperty(ref _pageTo, value, v => v < 0 ? 0 : v);
+    }
 
     private bool _useMultiplePrinters;
     /// <summary>طباعة الملفات على أكتر من طابعة.</summary>
@@ -304,6 +325,8 @@ public sealed class PrintSettings : ObservableObject
         PaperSize = other.PaperSize;
         ScalePercent = other.ScalePercent;
         TotalCopies = other.TotalCopies;
+        PageFrom = other.PageFrom;
+        PageTo = other.PageTo;
         UseMultiplePrinters = other.UseMultiplePrinters;
         DistributeCopies = other.DistributeCopies;
 

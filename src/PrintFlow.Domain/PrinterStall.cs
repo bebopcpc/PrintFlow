@@ -42,15 +42,33 @@ public enum StallReason
 /// </summary>
 public static class PrinterStall
 {
-    // أكواد Win32_Printer.DetectedErrorState (CIM)
+    // ═══ أكواد Win32_Printer.DetectedErrorState (CIM) ═══
+    //
+    // ⚠ الأرقام دي كانت **مزحلقة** واتصلّحت من توثيق مايكروسوفت الرسمي.
+    // الغلط كان بيعمل حاجتين وحشين:
+    //
+    //   • ٩ (مفصولة) كان مكتوب عليه "باب مفتوح" → الطابعة المفصولة كان
+    //     ردنا عليها "استنى"، فالجوب يفضل مستني لحد أربع ساعات على مكنة
+    //     مش موصولة أصلًا.
+    //
+    //   • ٧ (باب مفتوح) كان مكتوب عليه "مفصولة" → الباب المفتوح كان
+    //     بيلغي الجوب، وهو أسهل حاجة اليد البشرية بتحلها. عكس فلسفة
+    //     الملف ده بالظبط.
+    //
+    // وكمان ١١ (درج الخارج ملان) مكانش متعالج خالص، و٥ (حبر قليل) كان
+    // بيطلّع رسالة "الورق خلص".
+    //
+    // القايمة الصح: ٣ ورق قليل · ٤ ورق خلص · ٥ حبر قليل · ٦ حبر خلص
+    // ٧ باب مفتوح · ٨ ورق مزنوق · ٩ مفصولة · ١٠ صيانة · ١١ درج الخارج ملان
+    private const int ErrorLowPaper = 3;
     private const int ErrorNoPaper = 4;
-    private const int ErrorPaperJam = 3;
+    private const int ErrorLowToner = 5;
     private const int ErrorNoToner = 6;
-    private const int ErrorLowPaper = 5;
-    private const int ErrorDoorOpen = 9;
+    private const int ErrorDoorOpen = 7;
+    private const int ErrorPaperJam = 8;
+    private const int ErrorOffline = 9;
     private const int ErrorServiceRequested = 10;
-    private const int ErrorOutputBinFull = 8;
-    private const int ErrorOffline = 7;
+    private const int ErrorOutputBinFull = 11;
 
     // أكواد Win32_Printer.PrinterStatus
     private const int StatusPrinting = 4;
@@ -74,12 +92,13 @@ public static class PrinterStall
         // حالة العطل أدق حاجة عندنا، فبنبص عليها الأول
         switch (detectedErrorState)
         {
-            case ErrorNoPaper:
             case ErrorLowPaper:
+            case ErrorNoPaper:
             case ErrorPaperJam:
             case ErrorOutputBinFull:
                 return StallReason.Paper;
 
+            case ErrorLowToner:
             case ErrorNoToner:
                 return StallReason.Ink;
 

@@ -35,7 +35,7 @@ public sealed class WmiPrinterHealth : IPrinterHealth
     {
         try
         {
-            string escaped = printerName.Replace("'", "''");
+            string escaped = printerName.Replace("\\", "\\\\").Replace("'", "''");
 
             using var searcher = new ManagementObjectSearcher(
                 "SELECT PrinterStatus, DetectedErrorState, PrinterState, WorkOffline " +

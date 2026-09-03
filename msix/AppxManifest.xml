@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  PrintFlow — بيان حزمة MSIX لمتجر مايكروسوفت
+
+  ═══ ليه الملف ده موجود أصلًا ═══
+
+  Smart App Control في ويندوز ١١ بتفحص كل ملف .dll قبل ما يتحمّل، ولو
+  مش موقّع رقميًا بتمنعه — **ومفيش زرار "Run anyway"** زي SmartScreen.
+  يعني على أي جهاز ويندوز ١١ متنصّب نضيف، البرنامج مش هيشتغل خالص.
+
+  تطبيقات المتجر بتعدّي الفحص ده، لأن **مايكروسوفت هي اللي بتوقّعها**
+  بشهادتها بعد المراجعة — مجانًا، من غير ما نشتري شهادة توقيع.
+
+  ═══ القيم اللي متكتبة هنا ═══
+
+  Name و Publisher و PublisherDisplayName **مش اختراع** — دول القيم
+  اللي المتجر بيديها للتطبيق في Partner Center تحت "Product Identity".
+  لو حرف واحد اتغير فيهم، الرفع بيترفض.
+
+  Version لازم يبقى ٤ أجزاء والجزء الأخير **صفر** — الأخير محجوز
+  للمتجر نفسه. build.ps1 بيحقن الرقم من الـ csproj أوتوماتيك عشان
+  مايحصلش اللي حصل مع ملف .iss قبل كده (نسخة قديمة في ملف ونسيناها).
+
+  EntryPoint="Windows.FullTrustApplication" + runFullTrust هما اللي
+  بيخلّوا البرنامج ياخد صلاحيات تطبيق ويندوز عادي جوه الحزمة: يقرا
+  الطابعات بـ WMI، ويشغّل tools\SumatraPDF.exe كعملية منفصلة.
+  من غيرهم الحزمة تتبني وتتسطّب — والطباعة ماتشتغلش.
+-->
+
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <!-- القيم دي من Partner Center → Product Identity. متغيّرش فيها حاجة. -->
+  <Identity
+    Name="PrintFlow1.PrintFlow"
+    Publisher="CN=293AB140-634A-4E85-A1BC-D23213C4F4EA"
+    Version="1.9.9.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>PrintFlow</DisplayName>
+    <PublisherDisplayName>PrintFlow1</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- 19041 = ويندوز ١٠ إصدار 2004. أقل من كده مافيهوش دعم MSIX كويس. -->
+    <TargetDeviceFamily
+      Name="Windows.Desktop"
+      MinVersion="10.0.19041.0"
+      MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="ar" />
+    <Resource Language="en-US" />
+  </Resources>
+
+  <Applications>
+    <Application
+      Id="PrintFlow"
+      Executable="PrintFlow.UI.exe"
+      EntryPoint="Windows.FullTrustApplication">
+
+      <uap:VisualElements
+        DisplayName="PrintFlow"
+        Description="برنامج إدارة الطباعة وتوزيع الأوردرات على الطابعات"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+
+        <uap:DefaultTile
+          Square71x71Logo="Assets\Square71x71Logo.png"
+          Square310x310Logo="Assets\Square310x310Logo.png"
+          Wide310x150Logo="Assets\Wide310x150Logo.png" />
+
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- بيدّي البرنامج صلاحيات تطبيق سطح مكتب عادي: WMI للطابعات،
+         وتشغيل SumatraPDF.exe. Partner Center بيوافق عليها تلقائيًا
+         لتطبيقات سطح المكتب المغلّفة. -->
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+
+</Package>

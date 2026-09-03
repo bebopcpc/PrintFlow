@@ -23,6 +23,8 @@
         <local:NegateConverter x:Key="Negate"/>
         <local:ContentPositionToAlignmentConverter x:Key="PositionToAlign"/>
         <local:WarningBrushConverter x:Key="WarningBrush"/>
+                <local:LogLineBrushConverter x:Key="LogLineBrush"/>
+        <local:LogLineWeightConverter x:Key="LogLineWeight"/>
 
         <Style TargetType="GroupBox">
             <Setter Property="Margin" Value="0,0,0,10"/>
@@ -300,15 +302,39 @@
 
                                         <Border BorderBrush="#D0D7E2" BorderThickness="1" CornerRadius="4"
                                                 Padding="2" Margin="0,2,0,0">
-                                            <ListBox ItemsSource="{Binding Printers}" MaxHeight="150"
+                                                                                        <!--
+                                                الاسم الطويل كان بيتقص.
+
+                                                السبب مش العرض: الـ ListBoxItem
+                                                بياخد عرض محتواه مش عرض اللستة،
+                                                فالـ Wrap مالقاش حدود يلفّ عندها.
+                                                Stretch بيدي الصف عرض اللستة،
+                                                وساعتها اللفّ بيشتغل.
+
+                                                والنص اتشال من Content لجوّه
+                                                CheckBox عشان TextWrapping —
+                                                الـ Content النصي مابيلفّش.
+                                            -->
+                                            <ListBox ItemsSource="{Binding Printers}" MaxHeight="180"
                                                      BorderThickness="0" Background="Transparent"
+                                                     HorizontalContentAlignment="Stretch"
                                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                                <ListBox.ItemContainerStyle>
+                                                    <Style TargetType="ListBoxItem">
+                                                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                        <Setter Property="Padding" Value="0"/>
+                                                    </Style>
+                                                </ListBox.ItemContainerStyle>
                                                 <ListBox.ItemTemplate>
                                                     <DataTemplate>
                                                         <CheckBox IsChecked="{Binding IsSelected}"
-                                                                  Content="{Binding DisplayText}"
                                                                   IsEnabled="{Binding IsEligible}"
-                                                                  Margin="2"/>
+                                                                  VerticalContentAlignment="Center"
+                                                                  Margin="2,3"
+                                                                  ToolTip="{Binding DisplayText}">
+                                                            <TextBlock Text="{Binding DisplayText}"
+                                                                       TextWrapping="Wrap" LineHeight="17"/>
+                                                        </CheckBox>
                                                     </DataTemplate>
                                                 </ListBox.ItemTemplate>
                                             </ListBox>
@@ -340,15 +366,52 @@
                                         <ComboBox ItemsSource="{Binding PaperSizes}"
                                                   SelectedItem="{Binding Settings.PaperSize}"/>
 
-                                        <TextBlock Text="مقياس الصفحة (%)" Style="{StaticResource FieldLabel}"/>
-                                        <TextBox Text="{Binding Settings.ScalePercent, UpdateSourceTrigger=PropertyChanged}"
-                                                 ToolTip="مقاس الورقة مابيتغيّرش — المحتوى بس هو اللي بيصغّر أو يكبر.&#10;٩٥٪ مثلًا بتبعد المحتوى عن الحواف لو الطابعة بتقص منها.&#10;من ١٠ لـ ٤٠٠."/>
+                                       <TextBlock Text="مقياس الصفحة (%)" Style="{StaticResource FieldLabel}"/>
+<TextBox Text="{Binding Settings.ScalePercent, UpdateSourceTrigger=PropertyChanged, Delay=500}"
+         ToolTip="مقاس الورقة مابيتغيّرش — المحتوى بس هو اللي بيصغّر أو يكبر.&#10;٩٥٪ مثلًا بتبعد المحتوى عن الحواف لو الطابعة بتقص منها.&#10;من ١٠ لـ ٤٠٠."/>
                                         <TextBlock Text="{Binding ScaleSummary}" TextWrapping="Wrap"
                                                    FontSize="11" Foreground="{StaticResource MutedBrush}"
                                                    Margin="0,4,0,0"/>
 
                                         <TextBlock Text="إجمالي عدد النسخ" Style="{StaticResource FieldLabel}"/>
                                         <TextBox Text="{Binding Settings.TotalCopies}"/>
+                                        
+                                        <!-- مدى الصفحات: بيشتغل وقت الطباعة بس، فالمستند
+                                             مابيتغيّرش والترقيم بيفضل زي ما هو — على عكس
+                                             "حذف الصفحات" اللي بيعيد الترقيم من ١. -->
+                                        <TextBlock Text="مدى الصفحات (صفر = المستند كله)"
+                                                   Style="{StaticResource FieldLabel}"/>
+                                        <Grid Margin="0,2,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="8"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Text="من صفحة" FontSize="11"
+                                                           Foreground="{StaticResource MutedBrush}"/>
+                                                <TextBox Text="{Binding Settings.PageFrom}"
+                                                         ToolTip="أول صفحة تتطبع. صفر = من أول المستند."/>
+                                            </StackPanel>
+
+                                            <StackPanel Grid.Column="2">
+                                                <TextBlock Text="لصفحة" FontSize="11"
+                                                           Foreground="{StaticResource MutedBrush}"/>
+                                                <TextBox Text="{Binding Settings.PageTo}"
+                                                         ToolTip="آخر صفحة تتطبع. صفر = لآخر المستند."/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- السطر ده بيفضل ظاهر طول ما المدى شغّال. المدى
+                                             بيتحفظ بين التشغيلات، فمن غيره حد يظبطه وينساه
+                                             وكل أوردر بعد كده يتقص من غير ما حد ياخد باله. -->
+                                        <TextBlock Text="{Binding PageRangeSummary}" TextWrapping="Wrap"
+                                                   FontSize="11" FontWeight="SemiBold" Margin="0,6,0,0"
+                                                   Foreground="{Binding PageRangeIsActive,
+                                                                Converter={StaticResource WarningBrush}}"
+                                                   Visibility="{Binding PageRangeIsActive,
+                                                                Converter={StaticResource BoolToVis}}"/>
 
                                         <!-- تحذير فخّ الدمج: لو "دمج وحفظ الملفات" شغّال، الـ ٥٠
                                              ملزمة بتبقى مستند واحد والتوزيع مالوش حاجة يقسّمها
@@ -368,7 +431,7 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
-                                <RowDefinition Height="0"/>
+                                <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="140"/>
                             </Grid.RowDefinitions>
 
@@ -413,9 +476,95 @@
 <!-- صندوق "اختر الطابعات" كان هنا. اتشال: مالوش لازمة بعد ما
                                  القايمة بقت جنب باقي خيارات الطباعة، ووجوده في عمود
                                  تاني كان هو نفسه المشكلة. -->
-                                                        <GroupBox Grid.Row="3" Header="النتائج">
-                                <ListBox ItemsSource="{Binding Log}" BorderThickness="0" FontSize="11"
-                                         ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
+                                                             <GroupBox Grid.Row="2" Header="تقدم الأوردر" Margin="0,8,0,0"
+                                      Visibility="{Binding ShowProgress, Converter={StaticResource BoolToVis}}">
+                                <ItemsControl ItemsSource="{Binding Progress}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,3">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
+
+                                                <TextBlock Grid.Row="0" Text="{Binding Caption}" FontSize="11"
+                                                           TextTrimming="CharacterEllipsis" Margin="0,0,0,2"/>
+
+                                                <!-- السطر ده كلام الطابعة نفسها مش حسابنا: بيتحدّث كل
+                                                     تانيتين من طابور ويندوز، فبيتحرك مع الورق وهو طالع.
+                                                     بيختفي لما الدرايفر مايقولش أرقام. -->
+                                                <TextBlock Grid.Row="1" Text="{Binding QueueCaption}" FontSize="10"
+                                                           TextTrimming="CharacterEllipsis" Margin="0,0,0,3"
+                                                           Foreground="{StaticResource MutedBrush}"
+                                                           Visibility="{Binding HasQueueNews,
+                                                                        Converter={StaticResource BoolToVis}}"/>
+
+                                                <ProgressBar Grid.Row="2" Height="8" Minimum="0" Maximum="100"
+                                                             Value="{Binding Percent, Mode=OneWay}">
+                                                    <ProgressBar.Style>
+                                                        <Style TargetType="ProgressBar">
+                                                            <Setter Property="Foreground" Value="#2FA84F"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsFaulted}" Value="True">
+                                                                    <Setter Property="Foreground" Value="#E0483E"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </ProgressBar.Style>
+                                                </ProgressBar>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </GroupBox>
+                                                        <!--
+                                النتائج: سطر واحد لكل حدث، لونه بيقول نوعه.
+
+                                كان ListBox خام: كل السطور بنفس اللون ومقصوصة من
+                                الجنب، والتحذير اللي بيقول «٣ نسخة مش متأكدين
+                                طلعت» كان بيعدّي في وسط عشرين سطر عادي.
+
+                                الاختيار اتقفل عن قصد: ده تقرير بيتقرا مش لستة
+                                بتتختار منها، والزرقة اللي كانت بتظهر مع الكليك
+                                كانت بتخفي لون السطر نفسه.
+                            -->
+                            <GroupBox Grid.Row="3" Header="النتائج">
+                                <ListBox x:Name="ResultsLog" Loaded="ResultsLog_Loaded"
+                                         ItemsSource="{Binding Log}" BorderThickness="0"
+                                         Background="Transparent"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         HorizontalContentAlignment="Stretch"
+                                         VirtualizingPanel.ScrollUnit="Pixel">
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="Padding" Value="0"/>
+                                            <Setter Property="Margin" Value="0"/>
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                            <Setter Property="Focusable" Value="False"/>
+                                            <Setter Property="Template">
+                                                <Setter.Value>
+                                                    <ControlTemplate TargetType="ListBoxItem">
+                                                        <ContentPresenter/>
+                                                    </ControlTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="White" CornerRadius="4"
+                                                    Padding="8,5" Margin="0,0,0,3"
+                                                    BorderThickness="3,0,0,0"
+                                                    BorderBrush="{Binding Converter={StaticResource LogLineBrush}}">
+                                                <TextBlock Text="{Binding}" TextWrapping="Wrap"
+                                                           FontSize="11.5" LineHeight="18"
+                                                           Foreground="{Binding Converter={StaticResource LogLineBrush}}"
+                                                           FontWeight="{Binding Converter={StaticResource LogLineWeight}}"/>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
                             </GroupBox>
                         </Grid>
                     </Grid>
@@ -572,6 +721,32 @@
                                     <TextBlock Text="مسح الملفات المؤقتة الأقدم من (يوم)" Style="{StaticResource FieldLabel}"/>
                                     <TextBox Text="{Binding App.TempFileRetentionDays}"/>
 
+                                </StackPanel>
+                            </GroupBox>
+                            
+                            <!--
+                                صيانة. الزرار ده بيمسح طابور ويندوز كله مش
+                                طابور البرنامج، فمكانه هنا مش في تاب الرئيسية.
+
+                                مقفول لما يكون فيه شغل ماشي (IsIdle): لو
+                                اتضغط والأوردر بيتبعت، اللي إحنا بعتناه هو
+                                نفسه اللي هيتمسح.
+                            -->
+                            <GroupBox Header="صيانة">
+                                <StackPanel>
+                                    <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#666"
+                                               Text="لو الطابعة واقفة والجوبات مكوّمة ومش بتتحرك، ده بيصلّح طابور ويندوز."/>
+
+                                    <Button Content="تنظيف طابور الطباعة" Background="#B5651D"
+                                            HorizontalAlignment="Left" Margin="0,8,0,0"
+                                            Padding="10,6" FontSize="11"
+                                            Style="{StaticResource ActionButton}"
+                                            Command="{Binding CleanSpoolerCommand}"
+                                            ToolTip="بيوقف خدمة الطباعة، يمسح الجوبات الزنقانة، ويشغّلها تاني.&#10;⚠ بيمسح طابور ويندوز كله — أي شغل مستني من أي برنامج تاني هيضيع.&#10;⚠ محتاج تشغّل البرنامج كمسؤول (Run as administrator)."/>
+
+                                    <TextBlock TextWrapping="Wrap" FontSize="10" Foreground="#B06600"
+                                               Margin="0,6,0,0"
+                                               Text="⚠ بيمسح شغل كل البرامج المستني في الطابور، ومحتاج صلاحية مسؤول."/>
                                 </StackPanel>
                             </GroupBox>
 
@@ -831,17 +1006,28 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <ProgressBar Grid.Row="0" Height="3" IsIndeterminate="True" Margin="0,0,0,6"
+            <!-- بقى بيعدّ بجد وقت الطباعة. الشريط المتحرك (IsIndeterminate)
+                 بيفضل بس وقت المعالجة، اللي مالهاش نسبة معروفة. -->
+            <ProgressBar Grid.Row="0" Height="3" Margin="0,0,0,6"
+                         Minimum="0" Maximum="100"
+                         Value="{Binding OrderPercent, Mode=OneWay}"
+                         IsIndeterminate="{Binding ShowProgress, Converter={StaticResource InverseBool}}"
                          Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"/>
 
             <Grid Grid.Row="1">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
                 <TextBlock Grid.Column="0" Text="{Binding StatusText}" VerticalAlignment="Center"
                            Foreground="#555" TextTrimming="CharacterEllipsis"/>
+
+                <TextBlock Grid.Column="1" Text="{Binding OrderProgressText}" VerticalAlignment="Center"
+                           Margin="10,0,0,0" FontSize="11" FontWeight="SemiBold"
+                           Foreground="{StaticResource AccentBrush}"
+                           Visibility="{Binding ShowProgress, Converter={StaticResource BoolToVis}}"/>
 
                 <!--
                     لمبة الاستقبال. موجودة عشان بلاغ حقيقي: المستخدم ظبّط
@@ -853,7 +1039,7 @@
                     سامع"، وغيابها معناه "مش سامع". أوضح من سطر بيتقال مرة
                     في النتايج وبعدين يتلخبط وسط باقي السطور.
                 -->
-                <Border Grid.Column="1" Background="#E8F5E9" BorderBrush="#2FA84F" BorderThickness="1"
+                <Border Grid.Column="2" Background="#E8F5E9" BorderBrush="#2FA84F" BorderThickness="1"
                         CornerRadius="3" Padding="8,2" Margin="10,0,0,0"
                         ToolTip="{Binding ReceptionStatus}"
                         Visibility="{Binding ReceptionIsRunning, Converter={StaticResource BoolToVis}}">

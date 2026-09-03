@@ -56,12 +56,19 @@ public static class PrinterReady
     /// <summary>كام جوب مستني مسموح بيهم قبل ما نبطّل نبعت.</summary>
     public const int QueueRoom = 1;
 
-    // Win32_Printer.PrinterStatus
-    private const int StatusError = 2;
+    // Win32_Printer.PrinterStatus — ١ غير ذلك · ٢ غير معروف · ٣ فاضية
+    // ٤ بتطبع · ٥ بتسخّن · ٦ واقفة · ٧ مفصولة
     private const int StatusOffline = 7;
 
-    // Win32_Printer.DetectedErrorState
-    private const int ErrorOffline = 7;
+    // Win32_Printer.DetectedErrorState — ٩ هي المفصولة.
+    //
+    // ⚠ كانت مكتوبة ٧، و٧ في الجدول ده معناها **باب مفتوح**. الغلط ده
+    // كان بيخلي الباب المفتوح يترجم "الطابعة مفصولة أو مطفية" — رسالة
+    // بتبعت اللي في المطبعة يفحص الكابل بدل ما يقفل الباب.
+    //
+    // (لاحظ إن ٧ في PrinterStatus **فعلًا** معناها مفصولة — الرقمين
+    //  في جدولين مختلفين، وده بالظبط مصدر اللخبطة.)
+    private const int ErrorOffline = 9;
 
     /// <summary>
     /// بياخد أرقام WMI الخام ويقول: أبعت، أستنى، ولا فيها عطل.
@@ -90,11 +97,17 @@ public static class PrinterReady
             return PrinterVerdict.Faulted("الطابعة مفصولة أو مطفية");
         }
 
-        if (printerStatus == StatusError)
-        {
-            return PrinterVerdict.Faulted("الطابعة في حالة خطأ");
-        }
-
+        // ⚠ كان هنا فحص: printerStatus == 2 → "الطابعة في حالة خطأ".
+        //
+        // اتشال، لأن **مفيش قيمة اسمها خطأ في PrinterStatus أصلًا**.
+        // الرقم ٢ في الجدول ده معناه **«غير معروف»** — يعني الفحص كان
+        // بيعزل أي طابعة درايفرها مابيبلّغش حالتها كويس، ويقول عليها
+        // معطلة، وهي سليمة تمامًا. مطبعة فيها ٥ مكن كانت ممكن تشتغل
+        // بـ ٤ من غير ما حد يفهم ليه.
+        //
+        // وده كمان بيخالف قاعدة المشروع المكتوبة في أكتر من ملف:
+        // «مقدرناش نقرا» مش زي «شفنا إن فيه عطل». الأعطال الحقيقية
+        // بتيجي من DetectedErrorState تحت، وهي متغطية.
         var stall = PrinterStall.Diagnose(
             printerStatus,
             detectedErrorState,

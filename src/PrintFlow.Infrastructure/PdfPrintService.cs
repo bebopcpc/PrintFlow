@@ -112,13 +112,24 @@ public class PdfPrintService : IPdfPrintService
     /// PrintOutcome.Cancelled بهدوء عشان الموزّع يفهمه، مش يرمي استثناء.
     /// </summary>
     public Task<PrintOutcome> PrintAsync(PrintJob job, CancellationToken cancellationToken = default)
+        => PrintAsync(job, cancellationToken, onCopiesDelivered: null);
+
+    /// <summary>
+    /// نفس الطباعة، وبتبلّغ عن كل دفعة وهي ماشية.
+    /// شوف <see cref="IPdfPrintService"/> للسبب الكامل.
+    /// </summary>
+    public Task<PrintOutcome> PrintAsync(
+        PrintJob job,
+        CancellationToken cancellationToken,
+        Action<int>? onCopiesDelivered)
     {
         ArgumentNullException.ThrowIfNull(job);
 
-        return Task.Run(() => PrintOnBackgroundAsync(job, cancellationToken));
+        return Task.Run(() => PrintOnBackgroundAsync(job, cancellationToken, onCopiesDelivered));
     }
 
-    private async Task<PrintOutcome> PrintOnBackgroundAsync(PrintJob job, CancellationToken cancellationToken)
+    private async Task<PrintOutcome> PrintOnBackgroundAsync(
+        PrintJob job, CancellationToken cancellationToken, Action<int>? onCopiesDelivered)
     {
         if (job.Copies <= 0)
         {
@@ -138,6 +149,154 @@ public class PdfPrintService : IPdfPrintService
             return PrintOutcome.BadJob($"[فشل] الملف مش موجود: {job.FilePath}");
         }
 
+        var chunks = PrintChunking.Split(job.Copies, job.PagesPerCopy);
+
+        // دفعة واحدة = نفس السلوك القديم بالحرف، ومن غير أي انتظار زيادة.
+        // ده الطريق اللي بيمشي فيه أي أوردر عادي.
+        // ومابنندهش onCopiesDelivered هنا عن قصد: مفيش «وسط الطريق» أصلًا،
+        // والنتيجة النهائية بتوصل في نفس اللحظة. لو ندهناه، اللي بيستقبله
+        // كان هيحسب النسخ مرتين.
+        if (chunks.Count == 1)
+        {
+            return await SendOneAsync(job, cancellationToken);
+        }
+
+        return await SendInChunksAsync(job, chunks, cancellationToken, onCopiesDelivered);
+    }
+
+    /// <summary>
+    /// بيبعت النسخ على دفعات، واحدة ورا التانية.
+    ///
+    /// ═══ ليه واحدة ورا التانية مش كلهم مع بعض ═══
+    ///
+    /// لو بعتناهم كلهم في نفس اللحظة، السبولر هيلم الـ ١٨٠٠ صفحة تاني —
+    /// بس في عشر ملفات بدل ملف. المكسب كله في إن الطابعة تخلّص دفعة
+    /// وتفضّي نفسها قبل ما التانية توصلها.
+    ///
+    /// وبين كل دفعة والتانية بنستنى الطابور يفضى (بحد أقصى، شوف
+    /// <see cref="DrainCeiling"/>). لو الانتظار طوّل، بنكمل عادي بدل ما
+    /// نوقف الأوردر — أسوأ حالة إننا نرجع لسلوك النهاردة.
+    ///
+    /// ═══ لو دفعة وقعت ═══
+    ///
+    /// مفيش ولا دفعة اتسلّمت → بنرجّع سبب الفشل زي ما هو، والموزّع يتصرف
+    /// (ممكن ينقل الشغل لمكنة تانية بأمان).
+    ///
+    /// اتسلّم جزء وبعدين وقعت → **Abandoned**. ورق طلع فعلًا، فإعادة
+    /// الشغل آليًا معناها نسخ مكررة. الموزّع لازم يسيبها للبني آدم.
+    /// </summary>
+    private async Task<PrintOutcome> SendInChunksAsync(
+        PrintJob job,
+        IReadOnlyList<int> chunks,
+        CancellationToken cancellationToken,
+        Action<int>? onCopiesDelivered)
+    {
+        int delivered = 0;
+
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            // ⚠ الفحص ده لازم يبقى **قبل** ما ندوّر بروسيس جديد.
+            //
+            // من غيره، المستخدم بيدوس «إيقاف فوري»، إحنا بنفضّي طوابير
+            // الطباعة… وبعدين الدفعة اللي بعدها بتتبعت وتنزل الطابور
+            // **بعد** ما فضّيناه. يعني ورق بيطلع بعد الإيقاف وبعد
+            // التنضيف — وهي بالظبط المشكلة اللي التنضيف اتعمل عشانها.
+            //
+            // WaitForQueueToDrainAsync بيرجع بهدوء لما يتلغي (ومابيرميش)،
+            // فمن غير الفحص ده الحلقة كانت بتكمّل عادي كإن مفيش حاجة حصلت.
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return delivered == 0
+                    ? PrintOutcome.Cancelled($"[إلغاء] اتلغت الطباعة على '{job.PrinterName}'.")
+                    : PrintOutcome.Cancelled(
+                        $"[إلغاء] اتوقفت الطباعة على '{job.PrinterName}' بعد {delivered} من {job.Copies} نسخة.");
+            }
+
+            if (i > 0)
+            {
+                await WaitForQueueToDrainAsync(job.PrinterName, cancellationToken);
+            }
+
+            var outcome = await SendOneAsync(job with { Copies = chunks[i] }, cancellationToken);
+
+            // الإلغاء قرار بني آدم — بيعدّي زي ما هو من غير أي تفسير مننا
+            if (outcome.Kind == PrintResult.Cancelled)
+            {
+                return outcome;
+            }
+
+            if (outcome.Kind != PrintResult.Delivered)
+            {
+                if (delivered == 0)
+                {
+                    return outcome;
+                }
+
+                return PrintOutcome.Abandoned(
+                    $"[فشل] '{job.PrinterName}' — اتسلّم {delivered} من {job.Copies} نسخة وبعدين وقف. " +
+                    $"{outcome.Message.Replace("[فشل] ", "")} " +
+                    "⚠ فيه ورق طلع خلاص، فمانقدرش نعيد الأوردر لوحدنا — عدّ اللي خرج الأول.");
+            }
+
+            delivered += chunks[i];
+
+            // البار لازم يتحرك دلوقتي، مش بعد آخر دفعة.
+            //
+            // بيتنده بعد ما الدفعة تتسلّم فعلًا — مش قبلها — عشان الرقم
+            // اللي بيظهر يبقى ورق اتحرك بجد.
+            //
+            // ⚠ الـ try مقصود: النداء ده بيروح للواجهة، وأي استثناء منه
+            // مالوش أي علاقة بالطباعة. من غيره، بار مكسور كان هيقدر يوقّف
+            // أوردر شغّال — والورق أهم من الرسم.
+            try
+            {
+                onCopiesDelivered?.Invoke(chunks[i]);
+            }
+            catch
+            {
+                // مقصود: التقدّم مايوقفش الطباعة
+            }
+        }
+
+        return PrintOutcome.Delivered(
+            $"[نجاح] اتسلّمت {job.Copies} نسخة لطابور '{job.PrinterName}' " +
+            $"على {chunks.Count} دفعة (عشان ماتخنقش الطابعة) " +
+            $"بمقاس {job.PaperSize}{(job.Grayscale ? " (أبيض وأسود)" : "")}{(job.Duplex ? " (وجهين)" : "")}.");
+    }
+
+    /// <summary>أقصى انتظار للطابور يفضى بين دفعتين.</summary>
+    private static readonly TimeSpan DrainCeiling = TimeSpan.FromMinutes(20);
+
+    private static readonly TimeSpan DrainPoll = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// بيستنى طابور الطابعة يفضى — بحد أقصى، وعمره ما يفشّل الأوردر.
+    ///
+    /// لو WMI مش شغّالة على الجهاز، <c>HasJobs</c> بترجّع false والدالة دي
+    /// بترجع على طول. يعني الأجهزة اللي مانقدرش نقرا طابورها بتشتغل زي
+    /// النهاردة بالظبط — مفيش انتظار وهمي.
+    /// </summary>
+    private static async Task WaitForQueueToDrainAsync(
+        string printerName, CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + DrainCeiling;
+
+        while (HasJobs(printerName) && DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                await Task.Delay(DrainPoll, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                // اتلغى وإحنا مستنيين — الدفعة الجاية هي اللي هترجّع Cancelled
+                return;
+            }
+        }
+    }
+
+    private async Task<PrintOutcome> SendOneAsync(PrintJob job, CancellationToken cancellationToken)
+    {
         try
         {
             var startInfo = new ProcessStartInfo
@@ -344,8 +503,17 @@ public class PdfPrintService : IPdfPrintService
         {
             string escaped = printerName.Replace("'", "''").Replace("\\", "\\\\");
 
+            // ⚠ الفاصلة في آخر النمط مهمة. ويندوز بيسمّي الجوب
+            // «اسم الطابعة, رقم الجوب» — فمن غير الفاصلة، السؤال عن
+            // «Canon 1» بيرجّع شغل «Canon 10» و«Canon 12» كمان.
+            //
+            // الغلطة دي كانت شبه مالهاش أثر وهي بتغذّي ملاحظة مدتها
+            // ثانية ونص. بس دلوقتي نفس الدالة بتتحكم في **انتظار
+            // الطابور بين الدفعات** — فطابعة اسمها بيبدأ زي غيرها كانت
+            // ممكن تخلّي الدفعة الجاية تستنى عشرين دقيقة على شغل مكنة
+            // تانية خالص.
             using var searcher = new System.Management.ManagementObjectSearcher(
-                $"SELECT Name FROM Win32_PrintJob WHERE Name LIKE '{escaped}%'");
+                $"SELECT Name FROM Win32_PrintJob WHERE Name LIKE '{escaped},%'");
 
             foreach (var job in searcher.Get())
             {

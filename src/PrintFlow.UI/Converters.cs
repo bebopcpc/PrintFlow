@@ -124,3 +124,100 @@ public sealed class WarningBrushConverter : IValueConverter
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
         => Binding.DoNothing;
 }
+
+/// <summary>
+/// بيلوّن سطر النتائج حسب نوعه.
+///
+/// ═══ ليه محوّل مش تغيير في نوع اللوج ═══
+///
+/// اللوج <c>ObservableCollection&lt;string&gt;</c> وفيه أكتر من ٣٠ مكان
+/// في البرنامج بينده <c>Log.Add(...)</c>. لو حوّلناه لكائن فيه لون، كل
+/// النداءات دي لازم تتغيّر — تغيير كبير في نص البرنامج عشان لون.
+///
+/// السطور أصلًا بتبدأ بعلامة بين قوسين — <c>[فشل]</c>، <c>[نجاح]</c> —
+/// والعلامة دي هي المعلومة اللي إحنا عايزينها. فبنقراها من النص.
+///
+/// ⚠ الترتيب مقصود: سطر الملخص بيبدأ بـ "خلص" وبيلزق بعده "⚠ ٣ نسخة
+/// مش متأكدين". لو دوّرنا على "خلص" الأول، السطر ده كان هيطلع أخضر
+/// وفيه تحذير جواه — واللي في المطبعة كان هيعدّيه.
+/// </summary>
+public sealed class LogLineBrushConverter : IValueConverter
+{
+    private static readonly SolidColorBrush Bad = new(Color.FromRgb(0xC0, 0x39, 0x2B));
+    private static readonly SolidColorBrush Warn = new(Color.FromRgb(0xB0, 0x66, 0x00));
+    private static readonly SolidColorBrush Good = new(Color.FromRgb(0x1E, 0x7E, 0x34));
+    private static readonly SolidColorBrush Normal = new(Color.FromRgb(0x2B, 0x33, 0x40));
+
+    private static readonly string[] BadMarks =
+        ["⚠", "[فشل]", "[توقف]", "[شك]", "[إلغاء]", "[إيقاف]"];
+
+    private static readonly string[] WarnMarks =
+        ["[تنبيه]", "[وقفة]", "[تجاهل]", "[تخطي]"];
+
+    private static readonly string[] GoodMarks =
+        ["[نجاح]", "[رجعت]", "[قياس]", "خلص:"];
+
+    static LogLineBrushConverter()
+    {
+        Bad.Freeze();
+        Warn.Freeze();
+        Good.Freeze();
+        Normal.Freeze();
+    }
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is not string line || line.Length == 0)
+        {
+            return Normal;
+        }
+
+        if (Has(line, BadMarks))
+        {
+            return Bad;
+        }
+
+        if (Has(line, WarnMarks))
+        {
+            return Warn;
+        }
+
+        return Has(line, GoodMarks) ? Good : Normal;
+    }
+
+    private static bool Has(string line, string[] marks)
+    {
+        foreach (string mark in marks)
+        {
+            if (line.Contains(mark, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}
+
+/// <summary>
+/// نفس منطق <see cref="LogLineBrushConverter"/>، بس بيرجّع تِخن الخط.
+/// السطر المهم بيبان تخين عشان العين تقع عليه من غير ما تقرا.
+/// </summary>
+public sealed class LogLineWeightConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => value is string line
+           && (line.Contains('⚠', StringComparison.Ordinal)
+               || line.Contains("[فشل]", StringComparison.Ordinal)
+               || line.Contains("[توقف]", StringComparison.Ordinal)
+               || line.Contains("[شك]", StringComparison.Ordinal)
+               || line.Contains("خلص:", StringComparison.Ordinal))
+            ? FontWeights.SemiBold
+            : FontWeights.Normal;
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}

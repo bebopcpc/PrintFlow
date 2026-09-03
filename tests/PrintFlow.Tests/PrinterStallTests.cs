@@ -1,4 +1,4 @@
-using PrintFlow.Domain;
+﻿using PrintFlow.Domain;
 
 namespace PrintFlow.Tests;
 
@@ -15,10 +15,10 @@ public class PrinterStallTests
     // ══════════ حاجات اليد بتحلها = استنى ══════════
 
     [Theory]
+    [InlineData(3)]    // ورق قليل
     [InlineData(4)]    // ورق خلص
-    [InlineData(5)]    // ورق قرّب يخلص
-    [InlineData(3)]    // ورق اتزنق
-    [InlineData(8)]    // درج الخروج ملیان
+    [InlineData(8)]    // ورق اتزنق
+    [InlineData(11)]   // درج الخروج مليان
     public void Paper_Problems_Never_Cancel_The_Job(int errorState)
     {
         var reason = PrinterStall.Diagnose(
@@ -38,7 +38,7 @@ public class PrinterStallTests
     }
 
     [Theory]
-    [InlineData(9)]    // باب مفتوح
+    [InlineData(7)]    // باب مفتوح
     [InlineData(10)]   // صيانة مطلوبة
     public void Doors_And_Service_Never_Cancel_The_Job(int errorState)
     {
@@ -94,7 +94,7 @@ public class PrinterStallTests
         // "في جوبات" لوحدها كانت كفاية، كنا هنفضل مستنيين طابعة ميتة
         // للأبد.
         var reason = PrinterStall.Diagnose(
-            printerStatus: null, detectedErrorState: 7, isPaused: false, jobsWaiting: true);
+            printerStatus: null, detectedErrorState: 9, isPaused: false, jobsWaiting: true);
 
         Assert.Equal(StallReason.Unknown, reason);
         Assert.False(PrinterStall.ShouldKeepWaiting(reason));

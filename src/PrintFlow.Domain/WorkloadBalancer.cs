@@ -100,10 +100,15 @@ public static class WorkloadBalancer
     /// <param name="documents">المستندات الجاهزة بعد المعالجة.</param>
     /// <param name="copiesPerDocument">عدد النسخ المطلوبة من كل مستند.</param>
     /// <param name="printers">أسامي المكن المؤهلة، بالترتيب.</param>
+    /// <param name="speeds">
+    /// سرعات المكن المقيسة من أوردرات فاتت. سيبها فاضية والتوزيع بيرجع
+    /// بالتساوي بالظبط زي ما كان — ولا سطر في النتيجة بيتغيّر.
+    /// </param>
     public static WorkloadPlan Balance(
         IReadOnlyList<PrintableDocument> documents,
         int copiesPerDocument,
-        IReadOnlyList<string> printers)
+        IReadOnlyList<string> printers,
+        PrinterSpeeds? speeds = null)
     {
         ArgumentNullException.ThrowIfNull(documents);
         ArgumentNullException.ThrowIfNull(printers);
@@ -140,32 +145,65 @@ public static class WorkloadBalancer
             return byWeight != 0 ? byWeight : a.Document.CompareTo(b.Document);
         });
 
-        // ═══ ٣) كل قطعة للمكنة الأخف ═══
+        // ═══ ٣) كل قطعة للمكنة اللي هتخلّص بدري ═══
+        //
+        // كان: "روح للمكنة اللي حِملها أقل صفحات". ده بيتقسّم بالتساوي
+        // المطلق — ٥٧٠ صفحة على ٣ مكن = ١٩٠ لكل واحدة، حتى لو واحدة فيهم
+        // أسرع من التانية بالضعف. النتيجة إن السريعة بتخلص وتقف تستنى.
+        //
+        // بقى: "روح للمكنة اللي **وقت خلاصها** أقرب" — يعني الحِمل مقسوم
+        // على سرعتها. المكنة اللي بتطبع الضعف بتاخد الضعف، والكل بيخلص
+        // مع بعض فعلًا مش على الورق.
+        //
+        // ⚠ لما كل السرعات تبقى واحدة (مفيش قياسات لسه)، القسمة على نفس
+        // الرقم مابتغيّرش الترتيب — فالنتيجة **مطابقة حرفيًا** للقديم.
+        // وده اللي بيخلي كل التستات القديمة تفضل عدّاية من غير تعديل.
+        //
+        // ⚠ ودي لسه **توقُّع** مش أمر: القياس ممكن يبقى قديم أو المكنة
+        // تبوظ النهاردة. سرقة الشغل في WorkDispatcher هي صمام الأمان،
+        // وهي ما اتلمستش ولا سطر.
 
         var load = new long[printers.Count];
+        var speed = new double[printers.Count];
+
+        var book = speeds ?? PrinterSpeeds.Equal;
+
+        for (int printer = 0; printer < printers.Count; printer++)
+        {
+            double value = book.For(printers[printer]);
+
+            // حزام أمان: قسمة على صفر أو NaN كانت هتفضّي الأوردر كله على
+            // مكنة واحدة من غير ما حد ياخد باله.
+            speed[printer] = double.IsFinite(value) && value > 0 ? value : 1d;
+        }
 
         // [مكنة][مستند] = عدد النسخ
         var assigned = new Dictionary<(int Printer, int Document), int>();
 
         foreach (var (document, weight) in units)
         {
-            int lightest = 0;
+            int earliest = 0;
+            double bestFinish = load[0] / speed[0];
 
             for (int printer = 1; printer < printers.Count; printer++)
             {
+                double finish = load[printer] / speed[printer];
+
                 // "أقل من" مش "أقل أو يساوي" — عند التساوي بنفضل المكنة
                 // الأولى، وده اللي بيخلي النتيجة ثابتة
-                if (load[printer] < load[lightest])
+                if (finish < bestFinish)
                 {
-                    lightest = printer;
+                    earliest = printer;
+                    bestFinish = finish;
                 }
             }
 
-            load[lightest] += weight;
+            load[earliest] += weight;
 
-            var key = (lightest, document);
+            var key = (earliest, document);
             assigned[key] = assigned.TryGetValue(key, out int copies) ? copies + 1 : 1;
         }
+        
 
         // ═══ ٤) لمّ النسخ: نفس المستند على نفس المكنة = جوب واحد ═══
         //

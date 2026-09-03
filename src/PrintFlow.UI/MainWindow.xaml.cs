@@ -7,6 +7,9 @@ using Microsoft.Win32;
 using PrintFlow.Domain;
 using PrintFlow.Infrastructure;
 using PrintFlow.Presentation;
+using System.Collections.Specialized;
+using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace PrintFlow.UI;
 
@@ -182,5 +185,76 @@ public partial class MainWindow : Window
         {
             _viewModel.App.WatermarkImagePath = dialog.FileName;
         }
+    }
+        /// <summary>
+    /// بيخلي شريط النتائج يمشي مع آخر سطر لوحده.
+    ///
+    /// ═══ ليه ده كان لازم ═══
+    ///
+    /// الشريط طوله ١٤٠ بكسل، والسطور الجديدة بتتحط تحت — **برّه المنظر**.
+    /// فاللي واقف على المكنة بيبص على أول تلات سطور طول الأوردر وهما مش
+    /// بيتغيّروا، ويستنتج إن البرنامج **علّق**. حصل فعلًا، وقعدنا ندوّر على
+    /// فريز مش موجود: كل حاجة تقيلة أصلًا على ثريد خلفي.
+    ///
+    /// ═══ وليه بس لما يكون واقف في الآخر ═══
+    ///
+    /// لو المستخدم مرّر لفوق عشان يقرا تحذير، ماينفعش نخطف منه الشاشة كل
+    /// ما سطر جديد يجي. بنمشي معاه وهو في الآخر، وبنسيبه في حاله لو طلع.
+    /// </summary>
+        private bool _logScrollHooked;
+
+    private void ResultsLog_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (_logScrollHooked ||
+            sender is not ListBox list ||
+            list.ItemsSource is not INotifyCollectionChanged feed)
+        {
+            return;
+        }
+
+        _logScrollHooked = true;
+
+        feed.CollectionChanged += (_, args) =>
+        {
+            if (args.Action != NotifyCollectionChangedAction.Add || list.Items.Count == 0)
+            {
+                return;
+            }
+
+            if (FindScroller(list) is { } scroller && !IsAtBottom(scroller))
+            {
+                return;
+            }
+
+            list.ScrollIntoView(list.Items[list.Items.Count - 1]);
+        };
+    }
+
+    /// <summary>هل المنظر واقف في آخر اللستة؟ (بهامش سطر تقريبًا)</summary>
+    private static bool IsAtBottom(ScrollViewer scroller)
+        => scroller.VerticalOffset + scroller.ViewportHeight >= scroller.ExtentHeight - 24;
+
+    /// <summary>
+    /// بيدوّر على الـ ScrollViewer اللي جوّه الـ ListBox.
+    /// بيرجّع null لو لسه ما اتبنتش — وساعتها بنمرّر عادي.
+    /// </summary>
+    private static ScrollViewer? FindScroller(DependencyObject root)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+
+            if (child is ScrollViewer found)
+            {
+                return found;
+            }
+
+            if (FindScroller(child) is { } deeper)
+            {
+                return deeper;
+            }
+        }
+
+        return null;
     }
 }

@@ -34,6 +34,31 @@ public sealed record PrintJob
     /// صفر معناها مش معروف.
     /// </summary>
     public int PageCount { get; init; }
+        /// <summary>
+    /// أول صفحة تتطبع. صفر = من أول المستند. شوف <see cref="PageRange"/>.
+    /// </summary>
+    public int FirstPage { get; init; }
+
+    /// <summary>آخر صفحة تتطبع. صفر = لآخر المستند.</summary>
+    public int LastPage { get; init; }
+        /// <summary>
+    /// صفحات النسخة الواحدة فعلًا — بعد حساب مدى الصفحات.
+    ///
+    /// مستند ١٨٠ صفحة بمدى «من ٥ لـ ٢٠» نسخته ١٦ صفحة مش ١٨٠. التقسيم
+    /// بيتحسب على الرقم ده، فلو أخدنا <see cref="PageCount"/> على طول كنا
+    /// هنقسّم أوردر صغير لجوبات كتير من غير أي داعي.
+    ///
+    /// صفر = مش عارفين.
+    /// </summary>
+    public int PagesPerCopy
+    {
+        get
+        {
+            var (first, last) = PageRange.Resolve(FirstPage, LastPage, PageCount);
+
+            return last >= first && first > 0 ? last - first + 1 : PageCount;
+        }
+    }
 
     /// <summary>بيبني أمر طباعة من إعدادات الجوب الحالية.</summary>
     public static PrintJob From(
@@ -55,7 +80,9 @@ public sealed record PrintJob
             Duplex = settings.Duplex,
             DuplexFlip = settings.DuplexFlip,
             Orientation = settings.PageOrientation,
-            PageCount = pageCount
+            PageCount = pageCount,
+            FirstPage = settings.PageFrom,
+            LastPage = settings.PageTo
         };
     }
 }

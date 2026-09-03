@@ -18,12 +18,35 @@
     <Company>PrintFlow</Company>
     <Product>PrintFlow</Product>
     <AssemblyTitle>PrintFlow</AssemblyTitle>
+
+    <!-- الخانتين دول كانوا فاضيين في خصائص الملف (Properties → Details).
+         محركات فحص الفيروسات بتقرا الخانات دي، والملف اللي معلوماته ناقصة
+         بياخد درجة شك أعلى من الملف اللي معلوماته كاملة. مجرد ملّيهم بيقلّل
+         احتمال الإنذار الكاذب — مش بيلغيه، بس مش ببلاش.
+
+         بالإنجليزي عن قصد: دي بتروح لمورد النسخة في الملف التنفيذي،
+         واللي بيقراها أدوات وبني آدمين من كل الدنيا. -->
+    <Description>PrintFlow — print shop management and multi-printer job distribution</Description>
+    <Copyright>© 2026 PrintFlow</Copyright>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="..\..\tools\SumatraPDF.exe">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>tools\SumatraPDF.exe</Link>
+    </None>
+
+    <!-- ملفات رخصة SumatraPDF.
+
+         build.ps1 بينسخهم لنسخة الـ portable والـ Installer، والسطر ده
+         بيخليهم يدخلوا حزمة MSIX كمان — لأن الحزمة بتتبني من مخرجات
+         المشروع مش من مجلد publish.
+
+         مطوّر SumatraPDF قال إن التوزيع التجاري مسموح **بشرط** إرفاق
+         التلات ملفات دول. من غيرهم التوزيع مخالف للرخصة. -->
+    <None Include="..\..\tools\AUTHORS;..\..\tools\COPYING;..\..\tools\COPYING.BSD">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>tools\%(Filename)%(Extension)</Link>
     </None>
   </ItemGroup>
 

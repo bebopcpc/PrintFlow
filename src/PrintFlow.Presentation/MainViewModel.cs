@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using PrintFlow.Application;
 using PrintFlow.Domain;
 
@@ -21,6 +22,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly IPdfInfoService? _pdfInfo;
     private readonly IPdfSlideComposer? _slideComposer;
     private readonly IPdfPageScaler? _pageScaler;
+        private readonly IPrinterQueue? _printerQueue;
     private readonly IImageToPdfConverter? _imageConverter;
     private readonly IIncomingJobWatcher? _incoming;
 
@@ -29,6 +31,15 @@ public sealed class MainViewModel : ObservableObject
     /// يعني نفس سلوك النسخ القديمة بالظبط.
     /// </summary>
     private readonly IPrinterHealth _printerHealth;
+    
+    /// <summary>
+    /// دفتر سرعات المكن. بيتقرا وقت التوزيع وبيتكتب بعد ما الأوردر يخلص.
+    ///
+    /// بيتبني هنا مش بيتحقن من بره عن قصد: مالوش أي اعتماد على ويندوز ولا
+    /// على طابعة، ولو الملف بتاعه ضاع البرنامج بيرجع يوزّع بالتساوي زي
+    /// ما كان. يعني مفيش حاجة في البرنامج بتقف عشانه.
+    /// </summary>
+    private readonly PrinterSpeedBook _speeds = new();
 
     /// <summary>
     /// ثريد الواجهة، بيتلقط لحظة بناء الـ ViewModel.
@@ -76,8 +87,11 @@ public sealed class MainViewModel : ObservableObject
         IImageToPdfConverter? imageConverter = null,
         IIncomingJobWatcher? incomingWatcher = null,
         string appVersion = "",
-        IPrinterHealth? printerHealth = null)
+        IPrinterHealth? printerHealth = null,
+        IPrinterQueue? printerQueue = null)
     {
+        _printerQueue = printerQueue;
+
         _printerHealth = printerHealth ?? new AlwaysFinePrinterHealth();
         _jobLog = jobLog;
         _pdfInfo = pdfInfo;
@@ -124,20 +138,11 @@ public sealed class MainViewModel : ObservableObject
         // Reset كمان: كان من غير أي شرط خالص، فينفع يمسح _output والأوردر
         // نصه بره.
         ProcessCommand = new AsyncRelayCommand(ProcessAsync, () => Files.Count > 0 && !IsPrinting);
-        // !IsBusy مش زيادة: IsPrinting بتبقى false طول مرحلة **المعالجة**،
-        // والمعالجة بتنتهي بطباعة تلقائية. من غيرها الزرار بيفضل مفتوح
-        // طول الدمج — وهي نفس نافذة ١.٩.٧، بس أبكر بخطوة.
-        // Files.Count كمان: دلوقتي «طباعة الآن» بتشتغل على الملف الخام
-        // من غير ما تعدّي على المعالجة، فالزرار لازم يفتح أول ما ملف يتحمّل.
         PrintCommand = new AsyncRelayCommand(
             PrintAsync,
             () => (_output.Count > 0 || Files.Count > 0) && !IsBusy && !IsPrinting);
-
         ResetCommand = new RelayCommand(Reset, () => !IsBusy && !IsPrinting);
-
-        // ده الزرار الوحيد اللي **لازم** يشتغل والشغل ماشي، فشرطه معكوس.
-        CancelCommand = new RelayCommand(CancelPrinting, () => IsBusy || IsPrinting);
-
+        CancelCommand = new RelayCommand(CancelPrinting, () => IsPrinting);
         RemoveFileCommand = new RelayCommand<PdfFileItem>(RemoveFile);
 
         AddPresetCommand = new RelayCommand(AddPreset, () => !string.IsNullOrWhiteSpace(NewPresetName));
@@ -145,6 +150,11 @@ public sealed class MainViewModel : ObservableObject
         DeletePresetCommand = new RelayCommand(DeletePreset, () => SelectedPreset is not null);
         ApplyPresetCommand = new RelayCommand(ApplyPreset, () => SelectedPreset is not null);
         RestoreDefaultAppSettingsCommand = new RelayCommand(RestoreDefaultAppSettings);
+        
+        // IsIdle مش زيادة: تنضيف الطابور بيوقف خدمة الطباعة ويمسح الجوبات
+        // اللي فيها. لو اتضغط والأوردر ماشي، الشغل اللي إحنا بعتناه هو
+        // نفسه اللي هيتمسح — والمستخدم هيدفع تمن ورق طلع نُصه.
+        CleanSpoolerCommand = new AsyncRelayCommand(CleanSpoolerAsync, () => IsIdle);
 
         Files.CollectionChanged += (_, _) =>
         {
@@ -190,6 +200,13 @@ public sealed class MainViewModel : ObservableObject
             if (e.PropertyName == nameof(PrintSettings.ScalePercent))
             {
                 ScaleSummary = PageScaling.Describe(Settings.ScalePercent);
+            }
+            
+            if (e.PropertyName is nameof(PrintSettings.PageFrom)
+                or nameof(PrintSettings.PageTo))
+            {
+                OnPropertyChanged(nameof(PageRangeSummary));
+                OnPropertyChanged(nameof(PageRangeIsActive));
             }
 
             if (e.PropertyName is nameof(PrintSettings.UseMultiplePrinters)
@@ -333,6 +350,22 @@ public sealed class MainViewModel : ObservableObject
     {
         get
         {
+            // ═══ فيه أوردر ماشي؟ السطر ده مالوش معنى دلوقتي ═══
+            //
+            // السطر ده بيوصف **الأوردر الجاي**، وبيتحسب من حالة المكن
+            // دلوقتي. وحالة المكن بتتغيّر وسط الشغل: مكنة يخلص منها
+            // الورق تبقى "خطأ"، تخرج من المؤهلين، فالسطر يقول "مكنة
+            // واحدة هتطبع الـ٣٠ نسخة" — والبارات فوقه بتقول ٣ مكن
+            // شغالة فعلًا.
+            //
+            // الاتنين صح، بس الشاشة كانت بتحطّهم جنب بعض من غير ما
+            // تقول إن ده "دلوقتي" وده "الجاي". اللي واقف في المطبعة
+            // بيقرا السطر على إنه وصف للأوردر اللي قدامه.
+            if (IsPrinting)
+            {
+                return "فيه أوردر ماشي دلوقتي — شوف «تقدم الأوردر» فوق. السطر ده بيرجع أول ما يخلص.";
+            }
+
             var ticked = Printers.Where(p => p.IsSelected && p.IsEligible).ToList();
 
             if (ticked.Count == 0)
@@ -368,8 +401,11 @@ public sealed class MainViewModel : ObservableObject
                 return $"{ticked.Count} مكن مختارة — الشغل هيتقسّم عليهم. حمّل ملفات عشان نحسبلك القسمة.";
             }
 
+            // نفس اللقطة اللي الطباعة بتقراها. من غيرها السطر ده بيعرض
+            // القسمة بالتساوي والطباعة بتعمل قسمة موزونة — يعني الواجهة
+            // بتقول رقم والورق بيطلع برقم تاني.
             var plan = WorkloadBalancer.Balance(
-                documents, Settings.TotalCopies, ticked.Select(p => p.Name).ToList());
+                documents, Settings.TotalCopies, ticked.Select(p => p.Name).ToList(), _speeds.Snapshot());
 
             string split = string.Join(" / ", plan.Printers.Select(p => p.Pages));
 
@@ -478,6 +514,227 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>كام مستند جاهز للطباعة بعد المعالجة. في وضع الدمج بيبقى ١.</summary>
     public int OutputFileCount => _output.Count;
+    
+    // ══════════ شاشة التقدم ══════════
+
+    /// <summary>صف لكل مكنة شغّالة في الأوردر الحالي.</summary>
+    public ObservableCollection<PrinterProgress> Progress { get; } = new();
+
+    private bool _showProgress;
+    /// <summary>الشاشة بتبان وقت الشغل بس — مش عايزين بارات فاضية طول اليوم.</summary>
+    public bool ShowProgress
+    {
+        get => _showProgress;
+        private set => SetProperty(ref _showProgress, value);
+    }
+
+    private int _orderPagesPlanned;
+
+    /// <summary>نسبة الأوردر كله — دي اللي بتتحط في شريط الحالة تحت.</summary>
+    public double OrderPercent => _orderPagesPlanned <= 0
+        ? 0
+        : Math.Min(100d, Progress.Sum(p => p.PagesDone) * 100d / _orderPagesPlanned);
+
+    public string OrderProgressText
+    {
+        get
+        {
+            if (!ShowProgress)
+            {
+                return "";
+            }
+
+            int done = Progress.Sum(p => p.PagesDone);
+            int machines = Progress.Count(p => p.PagesDone > 0);
+
+            return $"{done} من {_orderPagesPlanned} صفحة ({OrderPercent:0}٪) على {machines} مكنة";
+        }
+    }
+
+    /// <summary>
+    /// بيجهّز صفوف التقدم من الخطة.
+    ///
+    /// الأرقام اللي هنا **توقُّع** مش أمر: الموزّع ممكن ينقل شغل من مكنة
+    /// وقعت لمكنة تانية، وساعتها الصف بتاعها بيعدّي نصيبه. الرقم اللي جنب
+    /// البار هو اللي بيقول اللي حصل فعلًا.
+    /// </summary>
+    private void StartProgress(IReadOnlyList<(string Name, int Pages, int Copies)> rows)
+    {
+        Progress.Clear();
+
+        foreach (var row in rows)
+        {
+            Progress.Add(new PrinterProgress(row.Name, row.Pages, row.Copies));
+        }
+
+        _orderPagesPlanned = rows.Sum(r => r.Pages);
+        ShowProgress = Progress.Count > 0;
+        RefreshOrderProgress();
+
+        // من هنا وطول الأوردر، بنسأل ويندوز كل شوية: الطابعة طلّعت كام
+        // فعلًا؟ من غير await عن قصد — الحلقة دي مالهاش دعوة بالطباعة،
+        // ولو وقعت الأوردر يكمّل عادي.
+        _ = PollPrinterQueuesAsync(PrintToken);
+    }
+
+    /// <summary>كل قد إيه نسأل الطابعات. تانيتين: حي كفاية، وخفيف على WMI.</summary>
+    private static readonly TimeSpan QueuePollInterval = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// بيسأل طابور كل مكنة كل تانيتين ويحدّث السطر التاني في صفها.
+    ///
+    /// ═══ ليه ده لازم يبقى موجود ═══
+    ///
+    /// عدّادنا بيزيد لما **القطعة تتسلّم للسبولر** — قطعة ١٨٠ صفحة بتتحسب
+    /// في ثانية واحدة. بعدها البار بيقف مايتحركش عشر دقايق كاملة والورق
+    /// بيطلع قدام اللي واقف في المطبعة. وهو طبعًا بيفتكر إن البرنامج علّق.
+    ///
+    /// الحلقة دي بتجيب الرقم من **الطابعة نفسها**، فالسطر بيتحرك مع الورق.
+    ///
+    /// ═══ قواعد السلامة ═══
+    ///
+    ///   • WMI بطيء وبيتعلّق أحيانًا، فبيتنده جوّه <c>Task.Run</c> —
+    ///     الواجهة عمرها ما تستناه.
+    ///   • أي رمية بتتبلع. ده عرض، مش طباعة.
+    ///   • لما الأوردر يخلص بنصفّر السطور، وإلا هتفضل مكتوب فيها كلام
+    ///     قديم عن طابور فاضي من ساعة.
+    /// </summary>
+    private async Task PollPrinterQueuesAsync(CancellationToken token)
+    {
+        if (_printerQueue is null)
+        {
+            return;
+        }
+
+        // ⚠ **لقطة مرة واحدة، دلوقتي، قبل أول await.**
+        //
+        // الحلقة دي بتعيش طول الأوردر جنب الطباعة. لو فضلت تقرا من
+        // <c>Progress</c> جوّه الحلقة، بتبقى بتلمس نفس اللستة اللي
+        // <c>StartProgress</c> بيعمللها Clear وبعدين Add لما أوردر
+        // تاني يبدأ — واللمستين دول على تريدين مختلفين بيبوّظوا
+        // <c>ObservableCollection</c> من جوه وبترمي IndexOutOfRange
+        // وسط الطباعة.
+        //
+        // مش نظري: تست «الضغط على طباعة مرتين» مسكها. وفي الواجهة
+        // الحقيقية <c>OnUiThread</c> بيوصّل الشغل لتريد الواجهة —
+        // بس لما مافيش SynchronizationContext (التستات، وأي مستضيف
+        // مش WPF) بينفّذ **في مكانه** على تريد الخلفية.
+        //
+        // الصفوف نفسها كائنات مستقلة، فتحديثها بعد كده أمان — وحتى
+        // لو أوردر تاني بدأ، بنكون بنحدّث صفوف قديمة محدش شايفها.
+        var rows = Progress.ToArray();
+
+        if (rows.Length == 0)
+        {
+            return;
+        }
+
+        var names = rows
+            .Select(row => row.PrinterName)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        try
+        {
+            while (!token.IsCancellationRequested && IsPrinting)
+            {
+                var states = await Task.Run(
+                    () => names.ToDictionary(
+                        name => name, name => _printerQueue.Read(name), StringComparer.Ordinal),
+                    token);
+
+                OnUiThread(() =>
+                {
+                    foreach (var row in rows)
+                    {
+                        if (states.TryGetValue(row.PrinterName, out var state))
+                        {
+                            row.Queue = state;
+                        }
+                    }
+                });
+
+                await Task.Delay(QueuePollInterval, token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // الأوردر اتلغى — طبيعي
+        }
+        catch
+        {
+            // مصدر معلومة للعرض. مايوقفش حاجة.
+        }
+        finally
+        {
+            // نفس اللقطة برضه — مش اللستة الحية.
+            OnUiThread(() =>
+            {
+                foreach (var row in rows)
+                {
+                    row.Queue = PrinterQueueState.Idle;
+                }
+            });
+        }
+    }
+
+    /// <summary>قطعة خلصت على مكنة. بيتنده من جوّه دالة الطباعة اللي الموزّع بينديها.</summary>
+    private void RecordProgress(string printerName, WorkUnit unit, PrintOutcome outcome)
+    {
+        var row = Progress.FirstOrDefault(p => p.PrinterName == printerName);
+
+        if (row is null)
+        {
+            return;
+        }
+
+        row.Record(unit, outcome);
+        RefreshOrderProgress();
+    }
+        /// <summary>
+    /// بيحرّك البار بعد **كل دفعة** في الجوب الكبير، والجوب لسه ماشي.
+    ///
+    /// ═══ المشكلة اللي بيحلها ═══
+    ///
+    /// الأوردر الكبير بيتبعت على دفعات، والنتيجة النهائية بتوصل بعد آخر
+    /// دفعة بس. النتيجة إن البار بيفضل على صفر عشر دقايق وبعدين يقفز ١٠٠٪.
+    ///
+    /// واللي واقف على المكنة بيفتكر البرنامج واقف فيدوس «إيقاف فوري» —
+    /// وساعتها الطابعات بتفضل تطلّع اللي في ذاكرتها وتقف في أوقات مختلفة.
+    /// دي بالظبط شكوى «وقفت عند الورقة ٤٠»: البرنامج كان شغّال، بس ساكت.
+    /// </summary>
+    private void NoteChunkProgress(string printerName, WorkUnit slice)
+    {
+        var row = Progress.FirstOrDefault(p => p.PrinterName == printerName);
+
+        if (row is null)
+        {
+            return;
+        }
+
+        row.NoteChunk(slice.Copies, slice.Weight);
+        RefreshOrderProgress();
+    }
+
+       /// <summary>الأوردر خلص — كل صف بيقفل على كلمة أخيرة والبارات بتفضل بانة.</summary>
+    /// <param name="orderCompleted">
+    /// الأوردر مشي لآخره؟ لو المستخدم وقّفه، مفيش صف بيتقال عنه "خلصت".
+    /// </param>
+    private void FinishProgress(bool orderCompleted)
+    {
+        foreach (var row in Progress)
+        {
+            row.Finish(orderCompleted);
+        }
+
+        RefreshOrderProgress();
+    }
+
+    private void RefreshOrderProgress()
+    {
+        OnPropertyChanged(nameof(OrderPercent));
+        OnPropertyChanged(nameof(OrderProgressText));
+    }
 
     // ══════════ معاينة الشرائح ══════════
 
@@ -535,6 +792,20 @@ public sealed class MainViewModel : ObservableObject
         get => _scaleSummary;
         private set => SetProperty(ref _scaleSummary, value);
     }
+        /// <summary>
+    /// تحذير مدى الصفحات — بيظهر بس لما المستخدم طالب جزء من المستند.
+    ///
+    /// ═══ ليه تحذير مش مجرد وصف ═══
+    ///
+    /// المدى بيتحفظ في الإعدادات وفي الـ Preset، يعني بيفضل شغّال بعد ما
+    /// المستخدم يقفل البرنامج ويفتحه. من غير سطر أحمر واضح، حد يظبط
+    /// "من ٥ لـ ٢٠" لأوردر واحد وينسى، وكل أوردر بعد كده يتقص من غير ما
+    /// حد ياخد باله — وده أوردر رايح في الزبالة.
+    /// </summary>
+    public string PageRangeSummary => PageRange.Describe(Settings.PageFrom, Settings.PageTo);
+
+    /// <summary>المدى شغّال؟ ده اللي بيظهّر السطر الأحمر ويخفيه.</summary>
+    public bool PageRangeIsActive => PageRange.IsSubset(Settings.PageFrom, Settings.PageTo);
 
     private string _distributionSummary = "";
     /// <summary>وصف اللي هيتوزّع على المكن، قبل ما الشغل يبدأ.</summary>
@@ -852,6 +1123,7 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand DeletePresetCommand { get; }
     public RelayCommand ApplyPresetCommand { get; }
     public RelayCommand RestoreDefaultAppSettingsCommand { get; }
+        public AsyncRelayCommand CleanSpoolerCommand { get; }
 
     // ══════════ الإعدادات المسبقة ══════════
 
@@ -2107,11 +2379,9 @@ public sealed class MainViewModel : ObservableObject
     /// مايبقاش فيه شق بين الفحص والقفل حد يدخل منه.
     /// </summary>
     private int _printInFlight;
-
     /// <summary>بيتلغي لما المستخدم يضغط «إيقاف فوري». null = مفيش طباعة ماشية.</summary>
     private CancellationTokenSource? _printCancel;
 
-    /// <summary>التوكن اللي بيوصل للموزّع ولـ SumatraPDF.</summary>
     private CancellationToken PrintToken => _printCancel?.Token ?? CancellationToken.None;
 
     /// <summary>فيه أوردر بيتبعت دلوقتي؟ الزراير بتتقفل على أساسها.</summary>
@@ -2179,41 +2449,14 @@ public sealed class MainViewModel : ObservableObject
         ProcessCommand.RaiseCanExecuteChanged();
         ResetCommand.RaiseCanExecuteChanged();
         CancelCommand.RaiseCanExecuteChanged();
+        CleanSpoolerCommand.RaiseCanExecuteChanged();
+
+        // سطر "الشغل هيتقسّم إزاي" بيتغيّر معنـاه أول ما أوردر يبدأ أو
+        // يخلص — من غير السطر ده بيفضل عالق على آخر حالة قبل الطباعة.
+        RefreshPrinterChoiceSummary();
     }
-
-    /// <summary>
-    /// إيقاف فوري.
-    ///
-    /// بيلغي التوكن بس — مش بيقتل حاجة بالعافية. الموزّع بيشوف الإلغاء،
-    /// يرجّع القطعة اللي في إيده للطابور، ويوقّف كل العمال. واللي ماتبعتش
-    /// بيطلع في التقرير بالاسم تحت «ماتبعتش خالص».
-    ///
-    /// اللي وصل طابور ويندوز خلاص مش بيرجع — ده بقى شغل السبولر، ولازم
-    /// المستخدم يعرف كده صراحة مش يفتكر إن الإيقاف رجّع كل حاجة.
-    /// </summary>
-    private void CancelPrinting()
-    {
-        var cts = _printCancel;
-
-        if (cts is null || cts.IsCancellationRequested)
-        {
-            return;
-        }
-
-        string line = "[إيقاف] المستخدم طلب إيقاف فوري — مفيش حاجة جديدة هتتبعت.";
-        Log.Add(line);
-        _jobLog?.Info(line);
-        StatusText = "بنوقف... اللي وصل طابور الطابعة لازم تلغيه من ويندوز.";
-
-        try
-        {
-            cts.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-            // الأوردر خلص لوحده قبل ما نلحق — مفيش حاجة تتلغي
-        }
-    }
+        
+    
 
     private async Task PrintCoreAsync()
     {
@@ -2272,7 +2515,10 @@ public sealed class MainViewModel : ObservableObject
             _jobLog?.Error("مقدرناش نحدّث حالة الطابعات قبل الطباعة", ex);
         }
 
-        var targets = ResolveTargetPrinters();
+              var targets = ResolveTargetPrinters();
+
+        // من غير الحارس ده، البرنامج بيكمّل على لستة فاضية ويقول
+        // «خلص الإرسال إلى 0 طابعة» — يعني بيدّعي النجاح وهو مابعتش حاجة.
         if (targets.Count == 0)
         {
             StatusText = "مفيش طابعة مؤهلة متاحة حاليًا. اتأكد إن الطابعة متوصلة وشغالة.";
@@ -2281,13 +2527,13 @@ public sealed class MainViewModel : ObservableObject
 
         var documents = ResolveDocumentsToPrint();
 
-        // طباعة خام: المستخدم لازم يعرف إن إعدادات المعالجة مش هتتطبق،
-        // وإلا هيستنى بوكليت وعلامة مائية ويلاقي ورق سادة.
         if (_output.Count == 0)
         {
-            string raw = "[طباعة مباشرة] الملفات هتتبعت زي ما هي — من غير دمج ولا بوكليت " +
-                         "ولا علامة مائية ولا ترقيم. لو عايز الحاجات دي، اضغط «بدء معالجة الملفات» الأول.";
-            Log.Add(raw);
+            // بيتحسب من الإعدادات الفعلية مش جملة ثابتة. الجملة القديمة
+            // كانت بتقول ٤ حاجات والحقيقة ٨ — والمستخدم اللي ظبط مقياس
+            // الصفحة ٩٢٪ قرا تحذير مش مذكور فيه المقياس، فطمن غلط وطبع
+            // أوردر من غير هامش. شوف SkippedProcessing.
+            string raw = SkippedProcessing.Describe(Settings, App, Files.Count);            Log.Add(raw);
             _jobLog?.Info(raw);
         }
 
@@ -2305,7 +2551,8 @@ public sealed class MainViewModel : ObservableObject
 
         if (distributing)
         {
-            await PrintDistributedAsync(targets, documents);
+            
+                        await PrintDistributedAsync(targets, documents);
         }
         else
         {
@@ -2319,22 +2566,121 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>كل طابعة تاخد كل المستندات بالعدد الكامل من النسخ.</summary>
+        /// <summary>كل طابعة تاخد كل المستندات بالعدد الكامل من النسخ.</summary>
     private async Task<string[]> PrintUniformAsync(
         List<PrinterItem> targets, List<PrintableDocument> documents)
     {
+        // نفس البارات هنا كمان. بار بيبان في وضع وبيختفي في وضع تاني
+        // بيخلي المستخدم يشك إن البرنامج واقف.
+        int pagesEach = documents.Sum(d => Math.Max(1, d.Pages)) * Settings.TotalCopies;
+
+        // كل مكنة بتطلّع العدد كامل من **كل** مستند
+        int copiesEach = documents.Count * Settings.TotalCopies;
+
+        StartProgress(targets.Select(t => (t.Name, pagesEach, copiesEach)).ToList());
+
+        // ═══ القياس هنا بيشتغل على مكنة واحدة بس ═══
+        //
+        // الطريق ده كان **مابيعلّمش كتاب السرعات ولا حاجة**. يعني المطبعة
+        // اللي بتشتغل على مكنة واحدة طول اليوم، الكتاب بيفضل فاضي عندها
+        // للأبد، ولما تيجي توزّع على مكنتين التوزيع بيبدأ من الصفر.
+        //
+        // ⚠ بس لما يبقى فيه أكتر من مكنة في الوضع ده، **كلهم بيطبعوا العدد
+        // كامل في نفس الوقت**. زمن الأوردر ساعتها هو زمن **أبطأ** مكنة،
+        // فالمكنة السريعة اللي خلّصت بدري هتتقاس على وقت غيرها وتتسجّل
+        // أبطأ من حقيقتها — وهنا مفيش سرقة شغل تصلّح الغلط زي التوزيع.
+        //
+        // فبنقيس لما نبقى متأكدين، ومانقيسش لما نبقى مش متأكدين. رقم
+        // مش موجود أحسن من رقم كذّاب.
+        bool canMeasure = targets.Count == 1;
+
+        if (canMeasure)
+        {
+            _speeds.OrderStarted();
+        }
+
         // مفيش Task.Run دلوقتي: PrintAsync بقت غير متزامنة بجد (WaitForExitAsync)،
         // فمفيش ثريد بيتحجز وهو مستني بروسيس الطباعة يخلص.
         var tasks =
             from document in documents
             from printer in targets
-            select _printService.PrintAsync(
-                PrintJob.From(Settings, document.Path, printer.Name, Settings.TotalCopies, document.Pages),
-                PrintToken);
+            select PrintOneAsync(document, printer);
 
         var outcomes = await Task.WhenAll(tasks);
 
-        return outcomes.Select(o => o.Message).ToArray();
+        FinishProgress(!PrintToken.IsCancellationRequested);
+
+        var lines = outcomes.Select(o => o.Message).ToList();
+
+        if (canMeasure)
+        {
+            string learned = _speeds.OrderFinished();
+
+            if (learned.Length > 0)
+            {
+                lines.Add(learned);
+            }
+        }
+
+        return [.. lines];
+
+        async Task<PrintOutcome> PrintOneAsync(PrintableDocument document, PrinterItem printer)
+        {
+            var job = PrintJob.From(
+                Settings, document.Path, printer.Name, Settings.TotalCopies, document.Pages);
+
+            var unit = new WorkUnit(document.Path, document.Pages, Settings.TotalCopies);
+
+            // النسخ اللي البار حسبها **وهي ماشية**، دفعة دفعة.
+            //
+            // الجوب الكبير بيتبعت على دفعات، ومن غير العدّاد ده النتيجة
+            // بتوصل بعد آخر دفعة بس — فالبار يفضل صفر عشر دقايق وبعدين
+            // يقفز ١٠٠٪، واللي واقف على المكنة يفتكره واقف ويوقّفه.
+            //
+            // بيتزوّد من ثريد خلفي، وبيتقرا بعد الـ await — والـ await
+            // نفسه بيضمن إن كل النداءات خلصت وظهرت قبل القراءة.
+            int credited = 0;
+
+            void OnChunkDelivered(int copies)
+            {
+                credited += copies;
+
+                // نفس المستند ونفس عدد الصفحات — النسخ بس هي اللي بتتغيّر،
+                // و Weight بيتحسب لوحده منها.
+                var slice = unit with { Copies = copies };
+
+                OnUiThread(() => NoteChunkProgress(printer.Name, slice));
+            }
+
+            var outcome = await _printService.PrintAsync(job, PrintToken, OnChunkDelivered);
+
+            if (canMeasure)
+            {
+                // نفس قواعد التوزيع بالحرف: اللي اتسلّم بيتقاس، واللي في
+                // الشك مابيتقاسش. مكنة الورق خلص منها مش «بطيئة».
+                if (outcome.Kind == PrintResult.Delivered)
+                {
+                    // الورق اللي طلع فعلًا بعد حساب مدى الصفحات — مش وزن
+                    // القطعة. شوف نفس التعليق في PrintDistributedAsync.
+                    _speeds.NoteDelivered(printer.Name, job.PagesPerCopy * unit.Copies);
+                }
+                else if (outcome.Kind is PrintResult.NotSent or PrintResult.Abandoned)
+                {
+                    _speeds.Distrust(printer.Name);
+                }
+            }
+
+            // ⚠ الباقي بس — اللي اتحسب من الدفعات مايتحسبش تاني.
+            //
+            // من غير الطرح ده، الجوب اللي اتبعت على ١٠ دفعات هيتسجّل ٢٠
+            // نسخة بدل ١٠: عشرة من النداءات وعشرة من النتيجة النهائية.
+            // البار كان هيقول ٢٠٠٪ واللي واقف على المكنة يعد ورق مش موجود.
+            var rest = unit with { Copies = Math.Max(0, unit.Copies - credited) };
+
+            OnUiThread(() => RecordProgress(printer.Name, rest, outcome));
+
+            return outcome;
+        }
     }
 
     /// <summary>
@@ -2360,30 +2706,107 @@ public sealed class MainViewModel : ObservableObject
     /// الخطة الأصلية لسه بتتحسب وبتتكتب في اللوج — بس دلوقتي بقت
     /// **توقُّع** مش أمر نهائي، والتقرير في الآخر بيقول اللي حصل فعلًا.
     /// </summary>
-    private async Task PrintDistributedAsync(
+    
+        private async Task PrintDistributedAsync(
         List<PrinterItem> targets, List<PrintableDocument> documents)
     {
-        var plan = WorkloadBalancer.Balance(
-            documents,
-            Settings.TotalCopies,
-            targets.Select(p => p.Name).ToList());
+        var names = targets.Select(p => p.Name).ToList();
+
+        // اللقطة بتتاخد **مرة واحدة** قبل التوزيع. لو قريناها جوّه الحلقة
+        // كانت هتتغيّر تحت رجلينا والخطة اللي في اللوج تبقى مش اللي حصل.
+        var speeds = _speeds.Snapshot();
+
+        var plan = WorkloadBalancer.Balance(documents, Settings.TotalCopies, names, speeds);
 
         string expected = "المتوقع — " + plan.Describe();
         Log.Add(expected);
         _jobLog?.Info(expected);
+
+        if (!speeds.IsEmpty)
+        {
+            string speedLine = speeds.Describe(names);
+            Log.Add(speedLine);
+            _jobLog?.Info(speedLine);
+        }
 
         foreach (var printer in plan.Printers.Where(p => !p.IsIdle))
         {
             _jobLog?.Info($"  {printer.PrinterName}: {printer.Documents} مستند، {printer.Pages} صفحة");
         }
 
+        // نصيب كل مكنة بالنسخ. PrinterWorkload بيقول الصفحات وعدد
+        // المستندات بس، والنسخ عايشة في التكليفات نفسها — فبنجمعها من
+        // هناك بدل ما نضيف حقل في ريكورد الدومين وناخد كل تستاته معانا.
+        var copiesPerPrinter = plan.Assignments
+            .GroupBy(a => a.PrinterName, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Sum(a => a.Copies), StringComparer.Ordinal);
+
+        // صفوف التقدم بتتبني من نفس الخطة اللي اتكتبت في اللوج فوق،
+        // فاللي المستخدم بيشوفه في البارات هو نفس اللي البرنامج وعد بيه.
+        StartProgress(plan.Printers
+            .Where(p => !p.IsIdle)
+            .Select(p => (
+                p.PrinterName,
+                p.Pages,
+                copiesPerPrinter.TryGetValue(p.PrinterName, out int copies) ? copies : 0))
+            .ToList());
+
+        // ساعة القياس بتبدأ مع الأوردر مش مع أول قطعة: المكنة اللي أخدت
+        // وقت قبل ما تسلّم حاجة، التأخير ده جزء من سرعتها الحقيقية.
+        _speeds.OrderStarted();
+
         // Task.Run عشان حلقة التوزيع كلها تمشي بعيد عن ثريد الواجهة.
         // من غيرها كل await جوّه الموزّع بيرجع للواجهة، والواجهة بتتلجلج
         // طول الأوردر. الـ say بيمرّ على OnUiThread أصلًا فالسطور بتوصل صح.
         var report = await Task.Run(() => WorkDispatcher.RunAsync(
             WorkSlicing.Lanes(plan),
-            (printerName, unit, token) => _printService.PrintAsync(
-                PrintJob.From(Settings, unit.Path, printerName, unit.Copies, unit.Pages), token),
+            async (printerName, unit, token) =>
+            {
+                // بنلفّ دالة الطباعة بدل ما نضيف حدث جديد للموزّع.
+                // الموزّع منطقه محسوب بالمللي ومختبَر — مش هنلمسه عشان بار.
+                var job = PrintJob.From(Settings, unit.Path, printerName, unit.Copies, unit.Pages);
+
+                // نفس فكرة الطريق الأحادي: القطعة الكبيرة ممكن تتبعت على
+                // دفعات، والبار لازم يتحرك مع كل دفعة مش يستنى الآخر.
+                // شوف NoteChunkProgress للسبب الكامل.
+                int credited = 0;
+
+                void OnChunkDelivered(int copies)
+                {
+                    credited += copies;
+                    var slice = unit with { Copies = copies };
+                    OnUiThread(() => NoteChunkProgress(printerName, slice));
+                }
+
+                var outcome = await _printService.PrintAsync(job, token, OnChunkDelivered);
+
+                // القياس بيتاخد من هنا كمان — نفس اللحظة اللي البار بيتحرك
+                // فيها. الورق اللي مش متأكدين منه مابيتحسبش سرعة.
+                if (outcome.Kind == PrintResult.Delivered)
+                {
+                    // ⚠ **الورق اللي طلع فعلًا**، مش وزن القطعة.
+                    //
+                    // <c>unit.Weight</c> بيحسب المستند كامل. مع مدى صفحات
+                    // «من ٥ لـ ٢٠» في مستند ١٨٠ صفحة، القطعة وزنها ١٨٠
+                    // والطابعة طلّعت ١٦ — يعني القياس كان هيقول إن المكنة
+                    // أسرع من حقيقتها **باحد عشر ضعف**، والرقم ده بيتحفظ
+                    // ويأثر على كل توزيع جاي حتى في أوردرات من غير مدى.
+                    //
+                    // PagesPerCopy بيحسب المدى، فالرقم ده مظبوط في الحالتين.
+                    _speeds.NoteDelivered(printerName, job.PagesPerCopy * unit.Copies);
+                }
+                else if (outcome.Kind is PrintResult.NotSent or PrintResult.Abandoned)
+                {
+                    _speeds.Distrust(printerName);
+                }
+
+                // الباقي بس — اللي اتحسب من الدفعات مايتحسبش تاني.
+                var rest = unit with { Copies = Math.Max(0, unit.Copies - credited) };
+
+                OnUiThread(() => RecordProgress(printerName, rest, outcome));
+
+                return outcome;
+            },
             _printerHealth,
             say: line => OnUiThread(() =>
             {
@@ -2415,11 +2838,48 @@ public sealed class MainViewModel : ObservableObject
             _jobLog?.Info(line);
         }
 
+
+        // ═══ المكنة اللي وقفت في النص مايتحسبش قياسها ═══
+        //
+        // Distrust جوّه حلقة الطباعة بيمسك حالة واحدة بس: مكنة فشلت
+        // **وهي ماسكة قطعة**. أما المكنة اللي وقفت وقعدت واقفة، فالموزّع
+        // مابيبعتلهاش حاجة من أصله — فمفيش نتيجة فشل توصل، وهي بتطلع في
+        // آخر الأوردر بصفحات قليلة واتسجّلت "بطيئة".
+        //
+        // والفرق مهم: دي مشكلة **توفّر** مش بطء. لو حسبناها، المكنة اللي
+        // خلص منها الورق النهاردة هتفضل واخدة نصيب صغير أسابيع بعد ما
+        // حد يحط فيها ورق.
+        //
+        // التقرير عارف مين وقف (Retired) — فبناخد منه.
+        foreach (var tally in report.Printers.Where(p => p.Retired))
+        {
+            _speeds.Distrust(tally.PrinterName);
+
+            // والبار كمان لازم يعرف. المكنة اللي وقفت مابيوصلهاش قطعة
+            // تفشل، فصفّها مايعرفش إنها ماتت — و FinishProgress كان
+            // بيقفلها على "خلصت ١٠٠٪".
+            Progress.FirstOrDefault(row => row.PrinterName == tally.PrinterName)
+                ?.Stopped(tally.RetiredBecause ?? "وقفت");
+        }
+
+        // بعد ما علّمنا الواقفين: دلوقتي بس نقفل الصفوف.
+        FinishProgress(!PrintToken.IsCancellationRequested);
+
+        // القياس بيتقفل بعد التقرير: المكنة اللي وقعت اتشال قياسها خلاص
+        // (Distrust)، واللي خلّصت بتدخل الدفتر. بيرجّع "" لو مفيش عيّنة
+        // تستاهل — وساعتها مابنكتبش سطر فاضي في اللوج.
+        string learned = _speeds.OrderFinished();
+
+        if (learned.Length > 0)
+        {
+            Log.Add(learned);
+            _jobLog?.Info(learned);
+        }
+
         StatusText = report.Clean
             ? $"خلص التوزيع على {report.Printers.Count(p => p.Units > 0)} طابعة."
             : "خلص التوزيع بس في شغل محتاج مراجعة — شوف النتائج.";
     }
-
     /// <summary>
     /// المكن اللي الشغل هيروح لها.
     ///
@@ -2438,18 +2898,6 @@ public sealed class MainViewModel : ObservableObject
     /// مفيش مفتاح ولا وضع ولا خطوة مخفية. وبس لو مفيش أي حاجة معلّمة
     /// بنرجع للطابعة الافتراضية عشان البرنامج مايقفش في وش المستخدم.
     /// </summary>
-    /// <summary>
-    /// المستندات اللي هتتطبع.
-    ///
-    /// لو فيه ناتج معالجة بنطبعه. لو مفيش، بنطبع الملفات زي ما هي —
-    /// اللي عايز يطبع ملف جاهز مالوش دعوة بالمعالجة أصلًا، وكان البرنامج
-    /// بيقوله «اضغط بدء معالجة الملفات الأول» على حاجة هو مش طالبها.
-    /// </summary>
-    private List<PrintableDocument> ResolveDocumentsToPrint()
-        => _output.Count > 0
-            ? _output
-            : Files.Select(f => new PrintableDocument(f.FullPath, f.PageCount ?? 0)).ToList();
-
     private List<PrinterItem> ResolveTargetPrinters()
     {
         var ticked = Printers.Where(p => p.IsSelected && p.IsEligible).ToList();
@@ -2466,6 +2914,16 @@ public sealed class MainViewModel : ObservableObject
 
         return fallback is not null && fallback.IsEligible ? [fallback] : [];
     }
+
+    /// <summary>
+    /// المستندات اللي هتتطبع. لو فيه ناتج معالجة بنطبعه؛ وإلا بنطبع
+    /// الملفات زي ما هي — المستخدم اللي عايز يطبع ملف جاهز مالوش دعوة
+    /// بالمعالجة أصلًا.
+    /// </summary>
+    private List<PrintableDocument> ResolveDocumentsToPrint()
+        => _output.Count > 0
+            ? _output
+            : Files.Select(f => new PrintableDocument(f.FullPath, f.PageCount ?? 0)).ToList();
 
     // ══════════ تصفير ══════════
 
@@ -2515,8 +2973,193 @@ public sealed class MainViewModel : ObservableObject
             Log.Add($"[استقبال] {ReceptionStatus}");
         }
 
-        RefreshCommandStates();
+        PrintCommand.RaiseCanExecuteChanged();
         StatusText = "اترجعت إعدادات الجوب للوضع الافتراضي. الإعدادات العامة والاستقبال زي ما هما.";
+    }
+
+    /// <summary>
+    /// بيلغي التوكن بس — مش بيقتل حاجة بالعافية. الموزّع بيشوف الإلغاء،
+    /// يرجّع القطعة اللي في إيده للطابور، ويوقف كل العمال. واللي ماتبعتش
+    /// بيطلع في التقرير بالاسم تحت «ماتبعتش خالص».
+    ///
+    /// اللي وصل طابور ويندوز خلاص مش بيرجع — ده بقى شغل السبولر.
+    /// </summary>
+    private void CancelPrinting()
+    {
+        var cts = _printCancel;
+
+        if (cts is null || cts.IsCancellationRequested)
+        {
+            return;
+        }
+
+               string line = "[إيقاف] المستخدم طلب إيقاف فوري — مفيش حاجة جديدة هتتبعت.";
+        Log.Add(line);
+        _jobLog?.Info(line);
+        StatusText = "بنوقف وبنفضّي طوابير الطباعة...";
+
+        // الأسامي بتتاخد **قبل** الإلغاء: صفوف التقدم ممكن تتقفل بعده.
+        var printers = Progress
+            .Select(row => row.PrinterName)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        try
+        {
+            cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // الأوردر خلص لوحده قبل ما نلحق — مفيش حاجة تتلغي
+        }
+
+        if (_printerQueue is not null && printers.Count > 0)
+        {
+            _ = PurgePrinterQueuesAsync(printers);
+        }
+    }
+
+    /// <summary>
+    /// بيفضّي طوابير المكن اللي كانت شغّالة في الأوردر.
+    ///
+    /// ═══ ليه ده كان لازم ═══
+    ///
+    /// قبل كده «إيقاف فوري» كان بيوقف **البرنامج** بس. الرسالة نفسها
+    /// كانت بتقول للمستخدم «اللي وصل طابور الطابعة لازم تلغيه من ويندوز»
+    /// — يعني إحنا عارفين المشكلة وسايبينله هو يحلها بإيده، وسط أوردر
+    /// بيتحرق قدامه.
+    ///
+    /// والنتيجة الأسوأ إن ده كان بيبان **زي العطل**: تدوس إيقاف، الورق
+    /// يفضل طالع دقيقة كمان، وبعدين المكن تقف واحدة ورا التانية — فتفتكر
+    /// إن البرنامج بوّظ الأوردر. حصلت فعلًا وقعدنا ندوّر على عطل مش موجود.
+    ///
+    /// من غير await عن قصد: الزرار لازم يرجع للمستخدم فورًا، وWMI بطيء.
+    /// </summary>
+    private async Task PurgePrinterQueuesAsync(IReadOnlyList<string> printers)
+    {
+        int removed = 0;
+
+        try
+        {
+            removed = await Task.Run(() => printers.Sum(name => _printerQueue!.CancelAll(name)));
+        }
+        catch
+        {
+            // مقدرناش نفضّي؟ الإلغاء نفسه حصل خلاص. بنقول الحقيقة تحت.
+        }
+
+        OnUiThread(() =>
+        {
+            string line = removed > 0
+                ? $"[إيقاف] اتشال {removed} جوب من طوابير الطباعة. " +
+                  "⚠ الورق اللي وصل ذاكرة المكنة نفسها هيطلع برضه — مفيش حاجة توقفه من الكمبيوتر."
+                : "[إيقاف] مفيش جوبات في الطوابير تتشال.";
+
+            Log.Add(line);
+            _jobLog?.Info(line);
+        });
+    }
+        // ══════════ تنضيف طابور الطباعة ══════════
+
+    /// <summary>
+    /// بيوقف خدمة السبولر، يمسح الجوبات الزنقانة، ويشغّلها تاني.
+    ///
+    /// ═══ اقرا ده قبل ما تضغط ═══
+    ///
+    ///   • بيمسح طابور **ويندوز كله**، مش طابور PrintFlow بس. أي حاجة
+    ///     مستنية من Word أو من أي برنامج تاني بتضيع معاها. عشان كده
+    ///     الزرار مقفول والأوردر ماشي.
+    ///   • محتاج صلاحية مسؤول. من غيرها ويندوز بيرفض إيقاف الخدمة —
+    ///     والرفض ده بيطلع على stderr **من غير ما كود الخروج يتغيّر**،
+    ///     فبنقراه بأيدينا بدل ما نصدّق الصفر.
+    ///   • الشاهد النهائي: بنسأل ويندوز في آخر السطر «الخدمة شغالة؟»
+    ///     ومابنقولش نجحنا غير لما يرد "Running". أوحش نتيجة ممكنة هي
+    ///     إن الخدمة تقف ومترجعش — والمطبعة تكتشف ده بعد ساعة.
+    /// </summary>
+    private async Task CleanSpoolerAsync()
+    {
+        string spool = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System), "spool", "PRINTERS");
+
+        string starting = "[تنبيه] بنوقف خدمة الطباعة وننضّف الطابور — أي شغل مستني في ويندوز هيضيع.";
+        Log.Add(starting);
+        _jobLog?.Info(starting);
+        StatusText = "بننضّف طابور الطباعة...";
+
+        var (running, output) = await Task.Run(() => RunPowerShell(
+            "$ErrorActionPreference='Stop'; " +
+            "Stop-Service -Name Spooler -Force; " +
+            $"Remove-Item -Path '{spool}\\*' -Force -Recurse -ErrorAction SilentlyContinue; " +
+            "Start-Service -Name Spooler; " +
+            "(Get-Service -Name Spooler).Status"));
+
+        string line = running
+            ? "[نجاح] الطابور اتنضّف وخدمة الطباعة رجعت شغالة."
+            : "[فشل] مانفعش ننضّف الطابور. اقفل البرنامج وافتحه «كمسؤول» " +
+              $"(كليك يمين ← Run as administrator) وجرّب تاني. رد ويندوز: {output}";
+
+        Log.Add(line);
+        _jobLog?.Info(line);
+
+        StatusText = running
+            ? "طابور الطباعة اتنضّف وخدمة الطباعة شغالة."
+            : "مانفعش ننضّف الطابور — محتاج تشغّل البرنامج كمسؤول.";
+    }
+
+    /// <summary>
+    /// بيشغّل سطر PowerShell ويرجّع: الخدمة رجعت شغالة؟ ونص الرد.
+    ///
+    /// الأوامر بتتبعت في <c>ArgumentList</c> مش في سترينج واحد — ويندوز
+    /// هو اللي بيتولى التهريب، فمسار فيه مسافة مايكسرش الأمر.
+    /// </summary>
+    private static (bool Running, string Output) RunPowerShell(string script)
+    {
+        var info = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        info.ArgumentList.Add("-NoProfile");
+        info.ArgumentList.Add("-ExecutionPolicy");
+        info.ArgumentList.Add("Bypass");
+        info.ArgumentList.Add("-Command");
+        info.ArgumentList.Add(script);
+
+        try
+        {
+            using var process = Process.Start(info);
+
+            if (process is null)
+            {
+                return (false, "مقدرناش نشغّل PowerShell.");
+            }
+
+            // بنقرا الاتنين قبل الانتظار: البروسيس بيقف لو الـ pipe اتملى
+            // وإحنا مستنيينه يخلص — قفلة كاملة من غير أي رسالة خطأ.
+            string stdout = process.StandardOutput.ReadToEnd();
+            string stderr = process.StandardError.ReadToEnd();
+
+            if (!process.WaitForExit(60_000))
+            {
+                return (false, "الأمر أخد أكتر من دقيقة — سيبناه.");
+            }
+
+            bool running = stdout.Contains("Running", StringComparison.OrdinalIgnoreCase);
+
+            string message = string.IsNullOrWhiteSpace(stderr)
+                ? stdout.Trim()
+                : stderr.Trim();
+
+            return (running, string.IsNullOrWhiteSpace(message) ? $"كود الخروج {process.ExitCode}." : message);
+        }
+        catch (Exception exception)
+        {
+            return (false, exception.Message);
+        }
     }
 
     /// <summary>

@@ -1,0 +1,93 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  PrintFlow â€” ط¨ظٹط§ظ† ط­ط²ظ…ط© MSIX ظ„ظ…طھط¬ط± ظ…ط§ظٹظƒط±ظˆط³ظˆظپطھ
+
+  â•گâ•گâ•گ ظ„ظٹظ‡ ط§ظ„ظ…ظ„ظپ ط¯ظ‡ ظ…ظˆط¬ظˆط¯ ط£طµظ„ظ‹ط§ â•گâ•گâ•گ
+
+  Smart App Control ظپظٹ ظˆظٹظ†ط¯ظˆط² ظ،ظ، ط¨طھظپط­طµ ظƒظ„ ظ…ظ„ظپ .dll ظ‚ط¨ظ„ ظ…ط§ ظٹطھط­ظ…ظ‘ظ„طŒ ظˆظ„ظˆ
+  ظ…ط´ ظ…ظˆظ‚ظ‘ط¹ ط±ظ‚ظ…ظٹظ‹ط§ ط¨طھظ…ظ†ط¹ظ‡ â€” **ظˆظ…ظپظٹط´ ط²ط±ط§ط± "Run anyway"** ط²ظٹ SmartScreen.
+  ظٹط¹ظ†ظٹ ط¹ظ„ظ‰ ط£ظٹ ط¬ظ‡ط§ط² ظˆظٹظ†ط¯ظˆط² ظ،ظ، ظ…طھظ†طµظ‘ط¨ ظ†ط¶ظٹظپطŒ ط§ظ„ط¨ط±ظ†ط§ظ…ط¬ ظ…ط´ ظ‡ظٹط´طھط؛ظ„ ط®ط§ظ„طµ.
+
+  طھط·ط¨ظٹظ‚ط§طھ ط§ظ„ظ…طھط¬ط± ط¨طھط¹ط¯ظ‘ظٹ ط§ظ„ظپط­طµ ط¯ظ‡طŒ ظ„ط£ظ† **ظ…ط§ظٹظƒط±ظˆط³ظˆظپطھ ظ‡ظٹ ط§ظ„ظ„ظٹ ط¨طھظˆظ‚ظ‘ط¹ظ‡ط§**
+  ط¨ط´ظ‡ط§ط¯طھظ‡ط§ ط¨ط¹ط¯ ط§ظ„ظ…ط±ط§ط¬ط¹ط© â€” ظ…ط¬ط§ظ†ظ‹ط§طŒ ظ…ظ† ط؛ظٹط± ظ…ط§ ظ†ط´طھط±ظٹ ط´ظ‡ط§ط¯ط© طھظˆظ‚ظٹط¹.
+
+  â•گâ•گâ•گ ط§ظ„ظ‚ظٹظ… ط§ظ„ظ„ظٹ ظ…طھظƒطھط¨ط© ظ‡ظ†ط§ â•گâ•گâ•گ
+
+  Name ظˆ Publisher ظˆ PublisherDisplayName **ظ…ط´ ط§ط®طھط±ط§ط¹** â€” ط¯ظˆظ„ ط§ظ„ظ‚ظٹظ…
+  ط§ظ„ظ„ظٹ ط§ظ„ظ…طھط¬ط± ط¨ظٹط¯ظٹظ‡ط§ ظ„ظ„طھط·ط¨ظٹظ‚ ظپظٹ Partner Center طھط­طھ "Product Identity".
+  ظ„ظˆ ط­ط±ظپ ظˆط§ط­ط¯ ط§طھط؛ظٹط± ظپظٹظ‡ظ…طŒ ط§ظ„ط±ظپط¹ ط¨ظٹطھط±ظپط¶.
+
+  Version ظ„ط§ط²ظ… ظٹط¨ظ‚ظ‰ ظ¤ ط£ط¬ط²ط§ط، ظˆط§ظ„ط¬ط²ط، ط§ظ„ط£ط®ظٹط± **طµظپط±** â€” ط§ظ„ط£ط®ظٹط± ظ…ط­ط¬ظˆط²
+  ظ„ظ„ظ…طھط¬ط± ظ†ظپط³ظ‡. build.ps1 ط¨ظٹط­ظ‚ظ† ط§ظ„ط±ظ‚ظ… ظ…ظ† ط§ظ„ظ€ csproj ط£ظˆطھظˆظ…ط§طھظٹظƒ ط¹ط´ط§ظ†
+  ظ…ط§ظٹط­طµظ„ط´ ط§ظ„ظ„ظٹ ط­طµظ„ ظ…ط¹ ظ…ظ„ظپ .iss ظ‚ط¨ظ„ ظƒط¯ظ‡ (ظ†ط³ط®ط© ظ‚ط¯ظٹظ…ط© ظپظٹ ظ…ظ„ظپ ظˆظ†ط³ظٹظ†ط§ظ‡ط§).
+
+  EntryPoint="Windows.FullTrustApplication" + runFullTrust ظ‡ظ…ط§ ط§ظ„ظ„ظٹ
+  ط¨ظٹط®ظ„ظ‘ظˆط§ ط§ظ„ط¨ط±ظ†ط§ظ…ط¬ ظٹط§ط®ط¯ طµظ„ط§ط­ظٹط§طھ طھط·ط¨ظٹظ‚ ظˆظٹظ†ط¯ظˆط² ط¹ط§ط¯ظٹ ط¬ظˆظ‡ ط§ظ„ط­ط²ظ…ط©: ظٹظ‚ط±ط§
+  ط§ظ„ط·ط§ط¨ط¹ط§طھ ط¨ظ€ WMIطŒ ظˆظٹط´ط؛ظ‘ظ„ tools\SumatraPDF.exe ظƒط¹ظ…ظ„ظٹط© ظ…ظ†ظپطµظ„ط©.
+  ظ…ظ† ط؛ظٹط±ظ‡ظ… ط§ظ„ط­ط²ظ…ط© طھطھط¨ظ†ظٹ ظˆطھطھط³ط·ظ‘ط¨ â€” ظˆط§ظ„ط·ط¨ط§ط¹ط© ظ…ط§طھط´طھط؛ظ„ط´.
+-->
+
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <!-- ط§ظ„ظ‚ظٹظ… ط¯ظٹ ظ…ظ† Partner Center â†’ Product Identity. ظ…طھط؛ظٹظ‘ط±ط´ ظپظٹظ‡ط§ ط­ط§ط¬ط©. -->
+  <Identity
+    Name="PrintFlow1.PrintFlow"
+    Publisher="CN=293AB140-634A-4E85-A1BC-D23213C4F4EA"
+    Version="1.9.9.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>PrintFlow</DisplayName>
+    <PublisherDisplayName>PrintFlow1</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- 19041 = ظˆظٹظ†ط¯ظˆط² ظ،ظ  ط¥طµط¯ط§ط± 2004. ط£ظ‚ظ„ ظ…ظ† ظƒط¯ظ‡ ظ…ط§ظپظٹظ‡ظˆط´ ط¯ط¹ظ… MSIX ظƒظˆظٹط³. -->
+    <TargetDeviceFamily
+      Name="Windows.Desktop"
+      MinVersion="10.0.19041.0"
+      MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="ar" />
+    <Resource Language="en-US" />
+  </Resources>
+
+  <Applications>
+    <Application
+      Id="PrintFlow"
+      Executable="PrintFlow.UI.exe"
+      EntryPoint="Windows.FullTrustApplication">
+
+      <uap:VisualElements
+        DisplayName="PrintFlow"
+        Description="ط¨ط±ظ†ط§ظ…ط¬ ط¥ط¯ط§ط±ط© ط§ظ„ط·ط¨ط§ط¹ط© ظˆطھظˆط²ظٹط¹ ط§ظ„ط£ظˆط±ط¯ط±ط§طھ ط¹ظ„ظ‰ ط§ظ„ط·ط§ط¨ط¹ط§طھ"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+
+        <uap:DefaultTile
+          Square71x71Logo="Assets\Square71x71Logo.png"
+          Square310x310Logo="Assets\Square310x310Logo.png"
+          Wide310x150Logo="Assets\Wide310x150Logo.png" />
+
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- ط¨ظٹط¯ظ‘ظٹ ط§ظ„ط¨ط±ظ†ط§ظ…ط¬ طµظ„ط§ط­ظٹط§طھ طھط·ط¨ظٹظ‚ ط³ط·ط­ ظ…ظƒطھط¨ ط¹ط§ط¯ظٹ: WMI ظ„ظ„ط·ط§ط¨ط¹ط§طھطŒ
+         ظˆطھط´ط؛ظٹظ„ SumatraPDF.exe. Partner Center ط¨ظٹظˆط§ظپظ‚ ط¹ظ„ظٹظ‡ط§ طھظ„ظ‚ط§ط¦ظٹظ‹ط§
+         ظ„طھط·ط¨ظٹظ‚ط§طھ ط³ط·ط­ ط§ظ„ظ…ظƒطھط¨ ط§ظ„ظ…ط؛ظ„ظ‘ظپط©. -->
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+
+</Package>
+

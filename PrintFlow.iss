@@ -26,6 +26,20 @@ PrivilegesRequired=admin
 UninstallDisplayIcon={app}\{#AppExe}
 DisableProgramGroupPage=yes
 
+; معلومات النسخة اللي بتظهر في Properties → Details على ملف الـ Setup نفسه.
+;
+; ليه اتضافت: ملف تثبيت من Inno من غير معلومات نسخة خانته كلها فاضية،
+; ومحركات فحص الفيروسات بتقرا الخانات دي. الملف المجهول تمامًا بياخد
+; درجة شك أعلى من الملف اللي مكتوب فيه مين عمله وإيه هو.
+;
+; بالإنجليزي عن قصد — دي بتتقرا بأدوات وناس من كل الدنيا، والعربي في
+; مورد النسخة بيطلع مقروء غلط في بعض الأدوات القديمة.
+VersionInfoVersion={#AppVersion}
+VersionInfoCompany={#AppPublisher}
+VersionInfoProductName={#AppName}
+VersionInfoDescription={#AppName} Setup - print shop management
+VersionInfoCopyright=Copyright (C) 2026 {#AppPublisher}
+
 [Languages]
 Name: "arabic"; MessagesFile: "compiler:Languages\Arabic.isl"
 
@@ -47,3 +61,7 @@ Filename: "{app}\{#AppExe}"; Description: "تشغيل {#AppName} الآن"; Flag
 ; ملاحظة: إعدادات المستخدم والإعدادات المسبقة وسجل التشغيل بيعيشوا في
 ; %AppData%\PrintFlow وعن قصد **مش** بيتمسحوا عند إلغاء التثبيت،
 ; عشان لو المستخدم عمل تحديث مايفقدش شغله.
+;
+; ملاحظة تانية: ملفات رخصة SumatraPDF (AUTHORS و COPYING و COPYING.BSD)
+; بتيجي لوحدها جوه publish\tools — build.ps1 بيحطها هناك، والسطر
+; "publish\*" مع recursesubdirs بياخدها. مش محتاجة سطر منفصل هنا.

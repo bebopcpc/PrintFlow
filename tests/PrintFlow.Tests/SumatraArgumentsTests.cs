@@ -165,7 +165,7 @@ public class SumatraArgumentsTests
         }, copies: 10);
 
         Assert.Equal(
-            "10x,paper=A3,landscape,noscale,monochrome,duplexshort",
+            "10x,paper=A3,landscape,shrink,monochrome,duplexshort",
             SumatraArguments.BuildPrintSettings(job));
     }
 

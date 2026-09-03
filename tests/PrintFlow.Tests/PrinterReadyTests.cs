@@ -1,4 +1,4 @@
-using PrintFlow.Domain;
+﻿using PrintFlow.Domain;
 
 namespace PrintFlow.Tests;
 
@@ -16,17 +16,27 @@ namespace PrintFlow.Tests;
 /// </summary>
 public class PrinterReadyTests
 {
-    // أكواد ويندوز اللي بنقراها
+    // ═══ أكواد ويندوز اللي بنقراها ═══
+    //
+    // ⚠ الأرقام دي كانت مزحلقة، والتستات كانت بتحرس الغلط. اتصلّحت من
+    // توثيق مايكروسوفت. لاحظ إن الرقم ٧ معناه حاجتين مختلفتين حسب
+    // الحقل — وده كان مصدر اللخبطة كلها.
+    //
+    // PrinterStatus: ١ غير ذلك · ٢ غير معروف · ٣ فاضية · ٤ بتطبع
+    //                ٥ بتسخّن · ٦ واقفة · ٧ مفصولة
     private const int Idle = 3;
     private const int Printing = 4;
-    private const int ErrorStatus = 2;
+    private const int UnknownStatus = 2;
     private const int OfflineStatus = 7;
 
+    // DetectedErrorState: ٣ ورق قليل · ٤ ورق خلص · ٥ حبر قليل · ٦ حبر خلص
+    //                     ٧ باب مفتوح · ٨ ورق مزنوق · ٩ مفصولة
+    //                     ١٠ صيانة · ١١ درج الخارج مليان
     private const int NoPaper = 4;
-    private const int PaperJam = 3;
+    private const int PaperJam = 8;
     private const int NoToner = 6;
-    private const int DoorOpen = 9;
-    private const int OfflineError = 7;
+    private const int DoorOpen = 7;
+    private const int OfflineError = 9;
 
     private static PrinterVerdict Ask(
         bool offline = false,
@@ -58,10 +68,22 @@ public class PrinterReadyTests
         Assert.Equal(PrinterReadiness.Faulted, Ask(error: OfflineError).State);
     }
 
+    /// <summary>
+    /// ⚠ التست ده كان اسمه An_Error_Status_Is_A_Fault وكان بيتأكد إن
+    /// PrinterStatus = 2 معناه عطل.
+    ///
+    /// **ومفيش قيمة اسمها «خطأ» في PrinterStatus أصلًا** — الرقم ٢
+    /// معناه «غير معروف». يعني الفحص كان بيعزل أي طابعة درايفرها
+    /// مابيبلّغش حالتها كويس ويقول عليها معطلة وهي سليمة: مطبعة فيها
+    /// ٥ مكن ممكن تشتغل بـ ٤ من غير ما حد يفهم ليه.
+    ///
+    /// اتقلب لعكسه: الحالة المجهولة **مش** عطل. الأعطال الحقيقية
+    /// بتيجي من DetectedErrorState، وهي متغطية في التستات التانية.
+    /// </summary>
     [Fact]
-    public void An_Error_Status_Is_A_Fault()
+    public void An_Unknown_Status_Is_Not_A_Fault()
     {
-        Assert.Equal(PrinterReadiness.Faulted, Ask(status: ErrorStatus).State);
+        Assert.Equal(PrinterReadiness.Ready, Ask(status: UnknownStatus).State);
     }
 
     [Fact]
