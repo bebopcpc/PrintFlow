@@ -38,6 +38,12 @@ public class PdfMergeService : IPdfMergeService
 
         var warnings = new List<string>();
 
+        // ⚠ الملفات اللي اتشالت بالكامل بتتجمّع بالاسم، مش سطر لكل ملف.
+        //
+        // في تجربة حقيقية اتحمّل ٤٠ ملف وكلهم اتشالوا، فالأربعين تنبيه
+        // اتلمّوا في **سطر واحد** ملا مربع النتايج كله وبقى مش ينفع يتقرا.
+        var emptied = new List<string>();
+
         try
         {
             using var output = new PdfDocument();
@@ -85,7 +91,7 @@ public class PdfMergeService : IPdfMergeService
                         // الملف اتشال بالكامل. مانوقفش الشغل — يمكن يكون ده
                         // المقصود — بس لازم يتقال، عشان محدش يكتشف بعد الطباعة
                         // إن ملف اختفى في صمت.
-                        warnings.Add($"الملف \"{Path.GetFileName(filePath)}\" اتشالت كل صفحاته");
+                        emptied.Add(Path.GetFileName(filePath));
                     }
 
                     fileRanges.Add(new PageRange(start, output.PageCount - start));
@@ -100,6 +106,15 @@ public class PdfMergeService : IPdfMergeService
                     string.IsNullOrWhiteSpace(request.PagesToDelete)
                         ? "الملفات المحمّلة مفيهاش أي صفحات."
                         : $"حذف الصفحات \"{request.PagesToDelete}\" شال كل الصفحات — مفيش حاجة تتطبع. راجع الأرقام.");
+            }
+
+            if (emptied.Count == 1)
+            {
+                warnings.Add($"الملف \"{emptied[0]}\" اتشالت كل صفحاته");
+            }
+            else if (emptied.Count > 1)
+            {
+                warnings.Add($"{emptied.Count} ملف اتشالت كل صفحاتهم: {FailureSummary.NameList(emptied)}");
             }
 
             ApplyOverlays(output, request, fileRanges, warnings);

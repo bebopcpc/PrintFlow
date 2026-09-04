@@ -29,10 +29,31 @@ public sealed class AppSettings : ObservableObject
     }
 
     private CountingMethod _countingMethod = CountingMethod.ByPage;
+    /// <summary>
+    /// السعر بيتحسب على إيه: الوجه المطبوع ولا الورقة.
+    ///
+    /// الاتنين طرق تسعير حقيقية، والفرق بينهم كبير: أوردر ١٢٠ وجه على
+    /// ٦٠ ورقة بيطلع بسعرين مختلفين تمامًا. شوف <see cref="PriceEstimate"/>.
+    /// </summary>
     public CountingMethod CountingMethod
     {
         get => _countingMethod;
         set => SetProperty(ref _countingMethod, value);
+    }
+
+    private decimal _unitPrice;
+    /// <summary>
+    /// سعر الوحدة الواحدة. الوحدة نفسها بتتحدد من <see cref="CountingMethod"/>.
+    ///
+    /// صفر معناه "مفيش تسعير" — وسطر التكلفة بيختفي خالص. رقم صفر جنب
+    /// أوردر حقيقي بيبان زي عطل والمستخدم بيقعد يدوّر على السبب.
+    ///
+    /// السالب بيترد لصفر: مفيش خصم بالسالب، ده بيبقى غلطة كتابة.
+    /// </summary>
+    public decimal UnitPrice
+    {
+        get => _unitPrice;
+        set => SetProperty(ref _unitPrice, value, v => v < 0m ? 0m : v);
     }
 
     private AppTheme _theme = AppTheme.Light;

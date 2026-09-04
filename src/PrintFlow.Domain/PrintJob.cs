@@ -58,15 +58,7 @@ public sealed record PrintJob
     ///
     /// صفر = مش عارفين.
     /// </summary>
-    public int PagesPerCopy
-    {
-        get
-        {
-            var (first, last) = PageRange.Resolve(FirstPage, LastPage, PageCount);
-
-            return last >= first && first > 0 ? last - first + 1 : PageCount;
-        }
-    }
+    public int PagesPerCopy => PageRange.CountIn(FirstPage, LastPage, PageCount);
 
     /// <summary>بيبني أمر طباعة من إعدادات الجوب الحالية.</summary>
     public static PrintJob From(

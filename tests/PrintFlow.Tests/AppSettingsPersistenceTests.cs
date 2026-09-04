@@ -293,6 +293,11 @@ public class AppSettingsPersistenceTests
         if (type == typeof(string)) return (string?)value == "مختلف" ? "غير" : "مختلف";
         if (type == typeof(int)) return (int)value! + 7;
 
+        // السعر decimal. من غير الحالة دي، المساعد بيرجّع نفس القيمة —
+        // فالخاصية ماتتغيّرش، ومحدش بيحفظ، والتست بيقع بسبب المساعد
+        // نفسه مش بسبب باج حقيقي.
+        if (type == typeof(decimal)) return (decimal)value! + 0.5m;
+
         if (type.IsEnum)
         {
             foreach (var candidate in Enum.GetValues(type))

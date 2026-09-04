@@ -478,6 +478,35 @@ public class MainViewModelTests : IDisposable
         Assert.NotEmpty(printer.Jobs);
         Assert.Contains("مفيش مكنة معلّمة", vm.PrinterChoiceSummary);
     }
+    
+    /// <summary>
+    /// ⚠ السطر ده كان بيقول «هيتطبع على PrintFlow لوحدها».
+    ///
+    /// و PrintFlow دي طابعة الاستقبال الوهمية — الطباعة عليها ممنوعة،
+    /// لأن الجوب بيرجع للبرنامج تاني وتبقى حلقة بتاكل القرص.
+    ///
+    /// السبب إن السطر كان بيختار الاحتياطي بنسخة تانية من المنطق من غير
+    /// ما تسأل «هو مؤهل؟»، بينما الطباعة بتسأل. فالشاشة كانت بتوعد بمكنة
+    /// والضغط بيقول «مفيش طابعة مؤهلة» — تناقض قدام اللي واقف على المكن.
+    /// </summary>
+    [Fact]
+    public async Task The_Summary_Never_Names_A_Printer_The_Order_Cannot_Use()
+    {
+        var repo = new FakePrinterRepository(
+            Printer(VirtualPrinter.PrinterName, PrinterStatus.Ready, isDefault: true),
+            Printer("HP", PrinterStatus.Paused));
+
+        var vm = CreateViewModel(repo, new FakePrintService());
+        await vm.RefreshPrintersAsync();
+
+        foreach (var p in vm.Printers)
+        {
+            p.IsSelected = false;
+        }
+
+        Assert.DoesNotContain(VirtualPrinter.PrinterName, vm.PrinterChoiceSummary);
+        Assert.Contains("مفيش طابعة مؤهلة", vm.PrinterChoiceSummary);
+    }
 
     [Fact]
     public async Task Selected_Printers_Are_Saved_Into_Settings_For_Presets()
@@ -1050,6 +1079,11 @@ public class MainViewModelTests : IDisposable
         if (type == typeof(bool)) return !(bool)value!;
         if (type == typeof(string)) return (string?)value == "مختلف" ? "غير" : "مختلف";
         if (type == typeof(int)) return (int)value! + 7;
+
+        // السعر decimal. من غير الحالة دي، المساعد بيرجّع نفس القيمة —
+        // فالخاصية ماتتغيّرش، ومحدش بيحفظ، والتست بيقع بسبب المساعد
+        // نفسه مش بسبب باج حقيقي.
+        if (type == typeof(decimal)) return (decimal)value! + 0.5m;
 
         if (type.IsEnum)
         {

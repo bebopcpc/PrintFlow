@@ -122,10 +122,25 @@
                     </Grid.RowDefinitions>
 
                     <Grid Grid.Row="0" IsEnabled="{Binding IsIdle}">
+                        <!-- ═══ الأعمدة نسبية بحد أدنى وأقصى، مش مقاس ثابت ═══
+
+                             كانت 250 و250 ثابتين. النافذة اتصممت على عرض 1080،
+                             فلما المستخدم بيكبّرها لـ 1920 العمودين دول بيفضلوا
+                             250 زي ما هما، وكل الزيادة بتروح لقايمة الملفات —
+                             اللي ممكن يكون فيها ملف واحد.
+
+                             النتيجة كانت: "كل مكنة تطبع العدد كامل (من غير تق..."
+                             مقصوصة، وسطرَي الورق والتكلفة تحت الطي محتاجين scroll
+                             عشان توصلهم — وهما بالظبط الرقمين اللي المفروض تبصلهم
+                             قبل ما تضغط طباعة.
+
+                             MinWidth = مايبقاش أوحش من اللي كان.
+                             MaxWidth = مايبقاش سخيف على شاشة عريضة (خانة اختيار
+                             بعرض نص شاشة مش أحسن، هي بس فاضية أكتر). -->
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="250"/>
-                            <ColumnDefinition Width="250"/>
-                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*" MinWidth="250" MaxWidth="420"/>
+                            <ColumnDefinition Width="*" MinWidth="250" MaxWidth="420"/>
+                            <ColumnDefinition Width="1.4*" MinWidth="300"/>
                         </Grid.ColumnDefinitions>
 
                         <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="0,0,8,0">
@@ -266,6 +281,18 @@
                                         <TextBlock Text="{Binding BookletSummary}" Margin="0,8,0,0"
                                                    FontSize="11" Foreground="#556" TextWrapping="Wrap"
                                                    Visibility="{Binding Settings.BookletMode,
+                                                                Converter={StaticResource BoolToVis}}"/>
+
+                                        <!-- الكتيّب بيعيد ترتيب الصفحات على أساس إن الورقة
+                                             هتتطبع من الوجهين وتتطوي. لو الوجهين مقفول، كل وش
+                                             بيروح على ورقة لوحده — ورق ضِعف اللازم ونُصّه فاضي.
+                                             والاتنين في مجموعتين مختلفتين، فاللي بيفتح الكتيّب
+                                             مش شايف حالة الوجهين قدامه أصلًا. -->
+                                        <TextBlock Text="{Binding BookletDuplexWarning}" TextWrapping="Wrap"
+                                                   FontSize="11" FontWeight="SemiBold" Margin="0,6,0,0"
+                                                   Foreground="{Binding BookletDuplexIsActive,
+                                                                Converter={StaticResource WarningBrush}}"
+                                                   Visibility="{Binding BookletDuplexIsActive,
                                                                 Converter={StaticResource BoolToVis}}"/>
                                     </StackPanel>
                                 </GroupBox>
@@ -421,6 +448,24 @@
                                                    Foreground="{Binding DistributionIsWarning,
                                                                 Converter={StaticResource WarningBrush}}"
                                                    Visibility="{Binding DistributionIsWarning,
+                                                                Converter={StaticResource BoolToVis}}"/>
+
+                                        <!-- الورق المتوقع. ده الرقم اللي المطبعة بتحضّر
+                                             وبتسعّر عليه — مش عدد الصفحات. أوردر ٢٤٠ صفحة
+                                             على الوجهين واتنين في الورقة = ٦٠ ورقة بس. -->
+                                        <TextBlock Text="{Binding PaperSummary}" TextWrapping="Wrap"
+                                                   FontSize="12" FontWeight="SemiBold" Margin="0,10,0,0"
+                                                   Foreground="#1B2A4A"
+                                                   Visibility="{Binding PaperSummaryIsVisible,
+                                                                Converter={StaticResource BoolToVis}}"/>
+
+                                        <!-- التكلفة. بتختفي خالص لما مفيش سعر متكتوب —
+                                             مش بتعرض صفر. الصفر جنب أوردر حقيقي بيبان زي
+                                             عطل والمستخدم بيقعد يدوّر على السبب. -->
+                                        <TextBlock Text="{Binding CostSummary}" TextWrapping="Wrap"
+                                                   FontSize="13" FontWeight="Bold" Margin="0,4,0,0"
+                                                   Foreground="#1B6E3C"
+                                                   Visibility="{Binding CostSummaryIsVisible,
                                                                 Converter={StaticResource BoolToVis}}"/>
                                     </StackPanel>
                                 </GroupBox>
@@ -663,10 +708,13 @@
             <!-- ══════════════════ تاب الإعدادات العامة ══════════════════ -->
             <TabItem Header="الإعدادات العامة">
                 <Grid Margin="0,10,0,0">
+                    <!-- نفس قاعدة تاب الرئيسية: نسبي بحد أدنى وأقصى.
+                         العمود التالت فيه المعاينة، ومقاسها ثابت 300×424 —
+                         فأي زيادة فوق كده بتبقى بياض. -->
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="290"/>
-                        <ColumnDefinition Width="320"/>
-                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*" MinWidth="290" MaxWidth="460"/>
+                        <ColumnDefinition Width="*" MinWidth="320" MaxWidth="480"/>
+                        <ColumnDefinition Width="*" MinWidth="330"/>
                     </Grid.ColumnDefinitions>
 
                     <!-- عام + ترقيم -->
@@ -685,11 +733,16 @@
                                               DisplayMemberPath="Label" SelectedValuePath="Value"
                                               SelectedValue="{Binding App.FileSortOrder}"/>
 
-                                    <TextBlock Text="طريقة الحساب (قريبًا)" Style="{StaticResource FieldLabel}"/>
+                                    <TextBlock Text="طريقة حساب التكلفة" Style="{StaticResource FieldLabel}"/>
                                     <ComboBox ItemsSource="{Binding CountingMethods}"
                                               DisplayMemberPath="Label" SelectedValuePath="Value"
-                                              SelectedValue="{Binding App.CountingMethod}" IsEnabled="False"
-                                              ToolTip="الاختيار بيتحفظ، بس حساب التكلفة بالورقة لسه مش مبني"/>
+                                              SelectedValue="{Binding App.CountingMethod}"
+                                              ToolTip="بالوجه = كل وش مطبوع بسعر، والوجهين بيكلّف الضِعف (طريقة المصوّراتي).&#10;بالورقة = الورقة بسعر مهما اتطبع عليها وش ولا وشين (طريقة الملازم والكتيّبات)."/>
+
+                                    <TextBlock Text="سعر الوحدة (جنيه)" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox Text="{Binding App.UnitPrice}"
+         FlowDirection="LeftToRight" TextAlignment="Left"
+         ToolTip="سيبها صفر لو مش عايز تسعير — سطر التكلفة هيختفي خالص."/>
 
                                     <TextBlock Text="المظهر (قريبًا)" Style="{StaticResource FieldLabel}"/>
                                     <ComboBox ItemsSource="{Binding Themes}"
@@ -747,6 +800,22 @@
                                     <TextBlock TextWrapping="Wrap" FontSize="10" Foreground="#B06600"
                                                Margin="0,6,0,0"
                                                Text="⚠ بيمسح شغل كل البرامج المستني في الطابور، ومحتاج صلاحية مسؤول."/>
+                                               
+                                    <Separator Margin="0,12,0,10"/>
+
+                                    <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#666"
+                                               Text="لو مكنة اتصلّحت أو اتبدّلت، البرنامج لسه فاكر سرعتها القديمة وبيوزّع عليها غلط."/>
+
+                                    <Button Content="صفّر قياس سرعة المكن" Background="#1B2A4A"
+                                            HorizontalAlignment="Left" Margin="0,8,0,0"
+                                            Padding="10,6" FontSize="11"
+                                            Style="{StaticResource ActionButton}"
+                                            Command="{Binding ForgetSpeedsCommand}"
+                                            ToolTip="بيمسح السرعات اللي البرنامج قاسها لكل مكنة.&#10;مالوش أي علاقة بطابور ويندوز — ده بيمسح ذاكرة البرنامج بس.&#10;مش محتاج صلاحية مسؤول."/>
+
+                                    <TextBlock TextWrapping="Wrap" FontSize="10" Foreground="#666"
+                                               Margin="0,6,0,0"
+                                               Text="أول أوردر كبير بعد كده هو اللي هيعلّم البرنامج من أول وجديد."/>
                                 </StackPanel>
                             </GroupBox>
 

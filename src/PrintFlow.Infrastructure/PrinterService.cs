@@ -26,11 +26,15 @@ public class PrinterService : IPrinterRepository
                     bool isOffline = Convert.ToBoolean(printer["WorkOffline"] ?? false);
                     int? printerStatus = printer["PrinterStatus"] != null ? Convert.ToInt32(printer["PrinterStatus"]) : null;
 
+                    // الحقل ده كان بيتسحب مع SELECT * ومحدش بيقراه — وهو
+                    // اللي فيه بت الإيقاف اليدوي.
+                    int? printerState = printer["PrinterState"] != null ? Convert.ToInt32(printer["PrinterState"]) : null;
+
                     result.Add(new Printer
                     {
                         Name = name,
                         IsDefault = name == defaultName,
-                        Status = PrinterStatusMapper.Map(isOffline, printerStatus),
+                        Status = PrinterStatusMapper.Map(isOffline, printerStatus, printerState),
                         Port = printer["PortName"]?.ToString(),
                         DriverName = printer["DriverName"]?.ToString()
                     });

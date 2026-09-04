@@ -140,14 +140,25 @@ public sealed class PrinterItem : ObservableObject
     public bool IsVirtualPrintFlow =>
         string.Equals(Name, VirtualPrinter.PrinterName, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// ⚠ الموقوفة **مش مؤهلة**.
+    ///
+    /// الطابعة الموقوفة بتقبل الجوبات وتكوّمها في طابورها من غير ما
+    /// تطلّع ورقة. لو بعتنالها نصيب، الأوردر بيستنى مكنة مش شغّالة
+    /// أصلًا — وده أسوأ من إننا نتخطّاها ونقول للراجل ليه.
+    /// </summary>
     public bool IsEligible =>
-        Status != PrinterStatus.Offline && Status != PrinterStatus.Error && !IsVirtualPrintFlow;
+        Status != PrinterStatus.Offline
+        && Status != PrinterStatus.Error
+        && Status != PrinterStatus.Paused
+        && !IsVirtualPrintFlow;
 
     public string StatusText => Status switch
     {
         PrinterStatus.Ready => "جاهزة",
         PrinterStatus.Offline => "غير متصلة",
         PrinterStatus.Error => "خطأ",
+        PrinterStatus.Paused => "موقوفة",
         _ => "غير معروف"
     };
 

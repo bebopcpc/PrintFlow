@@ -125,4 +125,48 @@ public class PageRangeTests
         Assert.Contains("5", line);
         Assert.Contains("20", line);
     }
+    
+    // ══════════ عدد الصفحات الفعلي ══════════
+
+    /// <summary>
+    /// ⚠ الباج اللي الاختبار الحقيقي مسكه.
+    ///
+    /// مستند ٢٤ صفحة بمدى «من ٥ لـ ٢٠» بيطلّع ١٦ ورقة — والبرنامج كان
+    /// بيعرض «٢٤ صفحة (١٠٠٪)» على أوردر طلّع منه ١٦ بس.
+    /// </summary>
+    [Theory]
+    [InlineData(5, 20, 24, 16)]     // الحالة اللي اتجربت بالورق
+    [InlineData(5, 20, 10, 6)]      // نفس المدى، مستند أقصر → رقم مختلف
+    [InlineData(0, 0, 24, 24)]      // مفيش مدى = المستند كله
+    [InlineData(1, 24, 24, 24)]     // مدى بيغطي المستند كله
+    [InlineData(20, 5, 24, 24)]     // مدى مقلوب = بنطبع الكل
+    [InlineData(5, 0, 24, 20)]      // من ٥ لآخر المستند
+    [InlineData(0, 20, 24, 20)]     // من الأول لـ ٢٠
+    [InlineData(5, 200, 24, 20)]    // النهاية أكبر من المستند → بتتقص
+    [InlineData(5, 20, 0, 16)]      // عدد الصفحات مجهول والمدى مقفول الطرفين
+    [InlineData(5, 0, 0, 0)]        // مجهول ومفيش نهاية → مانقدرش نعرف
+    public void Pages_In_A_Range_Are_Counted_Per_Document(int from, int to, int pageCount, int expected)
+    {
+        Assert.Equal(expected, PageRange.CountIn(from, to, pageCount));
+    }
+
+    /// <summary>
+    /// الحسبة كانت متكررة في مكانين. لو اتفرّقوا تاني، البار هيرجع يكدب
+    /// من غير ما حد ياخد باله.
+    /// </summary>
+    [Fact]
+    public void The_Job_And_The_Counter_Always_Agree()
+    {
+        var job = new PrintJob
+        {
+            FilePath = "x.pdf",
+            PrinterName = "HP",
+            PageCount = 24,
+            FirstPage = 5,
+            LastPage = 20
+        };
+
+        Assert.Equal(PageRange.CountIn(5, 20, 24), job.PagesPerCopy);
+        Assert.Equal(16, job.PagesPerCopy);
+    }
 }
